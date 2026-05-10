@@ -8,8 +8,8 @@ Enterprise-grade financial fraud detection system that combines MongoDB Atlas ve
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/mongodb-partners/maap-temporal-ai-agent-qs.git
-cd maap-temporal-ai-agent-qs
+git clone https://github.com/mongodb-partners/mongodb-temporal-ai-agent-qs.git
+cd mongodb-temporal-ai-agent-qs
 
 # 2. Configure environment (minimal setup)
 cp .env.example .env
