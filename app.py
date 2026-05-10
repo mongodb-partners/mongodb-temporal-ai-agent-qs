@@ -14,67 +14,210 @@ from database.repositories import HumanReviewRepository, TransactionRepository
 from utils.config import config
 from utils.decimal_utils import from_decimal128
 
-# Page configuration
+# Page configuration — MongoDB-branded title + favicon
 st.set_page_config(
-    page_title="AI Transaction Processing - MongoDB Atlas + Temporal",
-    page_icon="🏦",
+    page_title="AI Transaction Processing | MongoDB + Temporal",
+    page_icon="https://www.mongodb.com/assets/images/global/favicon.ico",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better UI
-st.markdown("""
+# ---------------------------------------------------------------------------
+# MongoDB-branded dark theme CSS (Solutions Library design system).
+# Brand palette: spring-green #00ED64, forest #00684A, navy #001E2B.
+# Fonts: Euclid Circular A (body), MongoDB Value Serif (H1).
+# ---------------------------------------------------------------------------
+
+_FONT_FACE_BLOCK = """
+@font-face {
+    font-family: 'Euclid Circular A';
+    src: url('https://static.mongodb.com/com/fonts/EuclidCircularA-Regular-WebXL.woff2') format('woff2');
+    font-weight: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'Euclid Circular A';
+    src: url('https://static.mongodb.com/com/fonts/EuclidCircularA-Medium-WebXL.woff2') format('woff2');
+    font-weight: 500;
+    font-display: swap;
+}
+@font-face {
+    font-family: 'MongoDB Value Serif';
+    src: url('https://static.mongodb.com/com/fonts/MongoDBValueSerif-Medium.woff2') format('woff2');
+    font-weight: 500;
+    font-display: swap;
+}
+"""
+
+_KEYFRAMES_BLOCK = """
+@keyframes aurora {
+    0% { transform: translate(0, 0) rotate(0deg) scale(1); }
+    25% { transform: translate(-3%, 2%) rotate(0.5deg) scale(1.01); }
+    50% { transform: translate(3%, -1%) rotate(-0.5deg) scale(0.99); }
+    75% { transform: translate(-2%, -3%) rotate(0.3deg) scale(1.005); }
+    100% { transform: translate(0, 0) rotate(0deg) scale(1); }
+}
+@keyframes shimmer {
+    0% { background-position: -200% center; }
+    100% { background-position: 200% center; }
+}
+"""
+
+MONGODB_THEME_CSS = f"""
 <style>
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .success-badge {
-        background-color: #28a745;
-        color: white;
-        padding: 0.25rem 0.5rem;
-        border-radius: 0.25rem;
-        font-size: 0.875rem;
-    }
-    .danger-badge {
-        background-color: #dc3545;
-        color: white;
-        padding: 0.25rem 0.5rem;
-        border-radius: 0.25rem;
-        font-size: 0.875rem;
-    }
-    .warning-badge {
-        background-color: #ffc107;
-        color: black;
-        padding: 0.25rem 0.5rem;
-        border-radius: 0.25rem;
-        font-size: 0.875rem;
-    }
-    .scenario-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1.5rem;
-        border-radius: 1rem;
-        margin: 1rem 0;
-    }
-    .workflow-running {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    .vector-match {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
+{_FONT_FACE_BLOCK}
+:root {{
+    --mdb-green: #00ED64;
+    --mdb-forest: #00684A;
+    --mdb-navy: #001E2B;
+    --mdb-bg: #060A0F;
+    --mdb-surface: #0C1117;
+    --mdb-surface-card: rgba(12, 17, 23, 0.85);
+    --mdb-border: rgba(255, 255, 255, 0.06);
+    --mdb-border-hover: rgba(0, 237, 100, 0.2);
+    --mdb-text: #F0F4F8;
+    --mdb-text-secondary: #C8D5DE;
+    --mdb-glow: rgba(0, 237, 100, 0.15);
+}}
+{_KEYFRAMES_BLOCK}
+.stApp {{
+    background: var(--mdb-bg) !important;
+    font-family: 'Euclid Circular A', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}}
+.stApp::before {{
+    content: '';
+    position: fixed;
+    inset: -50%;
+    background:
+        radial-gradient(ellipse at 20% 50%, rgba(0, 237, 100, 0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 20%, rgba(0, 120, 255, 0.04) 0%, transparent 40%),
+        radial-gradient(ellipse at 50% 80%, rgba(168, 85, 247, 0.03) 0%, transparent 45%);
+    animation: aurora 60s linear infinite;
+    pointer-events: none;
+    z-index: 0;
+}}
+.main .block-container {{ background: transparent !important; position: relative; z-index: 1; }}
+h1, .stTitle > div > h1 {{
+    font-family: 'MongoDB Value Serif', Georgia, serif !important;
+    color: var(--mdb-text) !important;
+    font-weight: 500 !important;
+    letter-spacing: -0.5px;
+}}
+h2, h3 {{ color: var(--mdb-text) !important; font-family: 'Euclid Circular A', sans-serif !important; }}
+p, span, label, .stCaption, .stMarkdown {{ color: var(--mdb-text-secondary) !important; }}
+section[data-testid="stSidebar"] {{ background: var(--mdb-surface) !important; border-right: 1px solid var(--mdb-border) !important; }}
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {{ color: var(--mdb-text) !important; }}
+section[data-testid="stSidebar"] .stMarkdown p {{ color: var(--mdb-text-secondary) !important; }}
+[data-testid="stMetric"] {{
+    background: var(--mdb-surface-card) !important;
+    border: 1px solid var(--mdb-border) !important;
+    border-radius: 12px !important;
+    padding: 16px 20px !important;
+    backdrop-filter: blur(12px) !important;
+    transition: all 0.3s ease !important;
+}}
+[data-testid="stMetric"]:hover {{
+    border-color: var(--mdb-border-hover) !important;
+    box-shadow: 0 0 20px var(--mdb-glow) !important;
+}}
+[data-testid="stMetric"] label {{
+    color: var(--mdb-text-secondary) !important;
+    font-size: 0.75rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1.5px !important;
+}}
+[data-testid="stMetric"] [data-testid="stMetricValue"] {{
+    color: var(--mdb-green) !important;
+    font-weight: 600 !important;
+    font-size: 1.8rem !important;
+    text-shadow: 0 0 30px rgba(0, 237, 100, 0.2);
+}}
+.stButton > button {{
+    background: linear-gradient(135deg, var(--mdb-forest), var(--mdb-green)) !important;
+    color: var(--mdb-navy) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-family: 'Euclid Circular A', sans-serif !important;
+    padding: 8px 24px !important;
+    transition: all 0.3s ease !important;
+    text-shadow: none !important;
+}}
+.stButton > button:hover {{
+    box-shadow: 0 0 24px rgba(0, 237, 100, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+    transform: translateY(-1px) !important;
+}}
+.stProgress > div > div {{
+    background: linear-gradient(90deg, var(--mdb-forest), var(--mdb-green)) !important;
+    border-radius: 4px !important;
+    box-shadow: 0 0 8px rgba(0, 237, 100, 0.3) !important;
+}}
+.stProgress > div {{ background: rgba(255, 255, 255, 0.05) !important; }}
+.stSelectbox > div > div, .stMultiSelect > div > div {{
+    background: var(--mdb-surface) !important;
+    border-color: var(--mdb-border) !important;
+    color: var(--mdb-text) !important;
+}}
+.streamlit-expanderHeader {{
+    background: var(--mdb-surface-card) !important;
+    border: 1px solid var(--mdb-border) !important;
+    border-radius: 8px !important;
+    color: var(--mdb-text) !important;
+}}
+.stTabs [data-baseweb="tab-list"] {{ border-bottom: 1px solid var(--mdb-border) !important; }}
+.stTabs [data-baseweb="tab"] {{ color: var(--mdb-text-secondary) !important; }}
+.stTabs [aria-selected="true"] {{ color: var(--mdb-green) !important; border-bottom-color: var(--mdb-green) !important; }}
+.stSuccess {{ background: rgba(0, 237, 100, 0.08) !important; border: 1px solid rgba(0, 237, 100, 0.2) !important; color: var(--mdb-green) !important; border-radius: 8px !important; }}
+.stInfo    {{ background: rgba(0, 120, 255, 0.08) !important; border: 1px solid rgba(0, 120, 255, 0.2) !important; color: #60A5FA !important; border-radius: 8px !important; }}
+.stWarning {{ background: rgba(255, 152, 0, 0.08) !important; border: 1px solid rgba(255, 152, 0, 0.2) !important; border-radius: 8px !important; }}
+.stError   {{ background: rgba(239, 68, 68, 0.08) !important; border: 1px solid rgba(239, 68, 68, 0.2) !important; border-radius: 8px !important; }}
+hr {{ border-color: var(--mdb-border) !important; }}
+.js-plotly-plot .plotly .main-svg {{ background: transparent !important; }}
+.stDataFrame {{ border: 1px solid var(--mdb-border) !important; border-radius: 8px !important; overflow: hidden; }}
+.stCaption p {{ color: var(--mdb-text-secondary) !important; }}
+.stRadio > label {{ color: var(--mdb-text) !important; }}
+::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+::-webkit-scrollbar-track {{ background: var(--mdb-bg); }}
+::-webkit-scrollbar-thumb {{ background: rgba(255, 255, 255, 0.1); border-radius: 3px; }}
+::-webkit-scrollbar-thumb:hover {{ background: rgba(0, 237, 100, 0.3); }}
 </style>
-""", unsafe_allow_html=True)
+"""
+
+# ---------------------------------------------------------------------------
+# Plotly theming helpers — applied to every Plotly figure via apply_mdb_theme.
+# ---------------------------------------------------------------------------
+
+PLOTLY_THEME = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(12,17,23,0.6)",
+    font_color="#F0F4F8",
+    font_family="Euclid Circular A, sans-serif",
+    title_font_color="#F0F4F8",
+    legend_font_color="#C8D5DE",
+    xaxis=dict(gridcolor="rgba(255,255,255,0.04)", zerolinecolor="rgba(255,255,255,0.06)"),
+    yaxis=dict(gridcolor="rgba(255,255,255,0.04)", zerolinecolor="rgba(255,255,255,0.06)"),
+)
+
+
+def apply_mdb_theme(fig, polar: bool = False):
+    """Apply the MongoDB dark theme to a Plotly figure. polar=True for radar charts."""
+    if polar:
+        layout = {k: v for k, v in PLOTLY_THEME.items() if k not in ("xaxis", "yaxis")}
+        layout["polar"] = dict(
+            bgcolor=PLOTLY_THEME["plot_bgcolor"],
+            radialaxis=dict(gridcolor=PLOTLY_THEME["xaxis"]["gridcolor"]),
+            angularaxis=dict(gridcolor=PLOTLY_THEME["xaxis"]["gridcolor"]),
+        )
+        fig.update_layout(**layout)
+    else:
+        fig.update_layout(**PLOTLY_THEME)
+    return fig
+
+
+# Inject the MongoDB dark theme CSS
+st.markdown(MONGODB_THEME_CSS, unsafe_allow_html=True)
 
 # Initialize session state
 if 'transactions' not in st.session_state:
@@ -141,49 +284,65 @@ async def get_workflow_status(workflow_id: str):
             pass
     return {"status": "unknown"}
 
-# Header with MongoDB Atlas and Temporal branding
-# Logo URLs
-mdblogo_svg = "https://webimages.mongodb.com/_com_assets/cms/kuyjf3vea2hg34taa-horizontal_default_slate_blue.svg?auto=format%252Ccompress"
-temporallogo_svg = "https://docs.temporal.io/img/assets/temporal-logo-dark.svg"
+# ---------------------------------------------------------------------------
+# Header — inline-SVG MongoDB + Temporal lockup, branded H1, theme-aware
+# ---------------------------------------------------------------------------
 
-# Display logos centered
-st.markdown(f"""
-<style>
-    .logo-container {{
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        padding: 20px 0;
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        border-radius: 10px;
-        margin-bottom: 20px;
-    }}
-    .logo-container img {{
-        height: 50px;
-        object-fit: contain;
-    }}
-    .plus-symbol {{
-        font-size: 30px;
-        font-weight: bold;
-        color: #4a5568;
-        margin: 0 30px;
-    }}
-</style>
-<div class="logo-container">
-    <a href="https://www.mongodb.com/atlas" target="_blank">
-        <img src="{mdblogo_svg}" alt="MongoDB Atlas" />
-    </a>
-    <span class="plus-symbol">+</span>
-    <a href="https://temporal.io/" target="_blank">
-        <img src="{temporallogo_svg}" alt="Temporal" />
-    </a>
-</div>
-""", unsafe_allow_html=True)
+# MongoDB logo (verbatim from MongoDB Solutions Library, spring-green fill)
+_MDB_LOGO_SVG = """
+<svg width="240" height="60" viewBox="0 0 1102 278" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="MongoDB">
+<path d="M82.3229 28.6444C71.5367 15.8469 62.2485 2.84945 60.351 0.149971C60.1512 -0.0499903 59.8515 -0.0499903 59.6518 0.149971C57.7542 2.84945 48.4661 15.8469 37.6798 28.6444C-54.9019 146.721 52.2613 226.406 52.2613 226.406L53.1601 227.006C53.959 239.303 55.9565 257 55.9565 257H59.9514H63.9463C63.9463 257 65.9438 239.403 66.7428 227.006L67.6416 226.306C67.7414 226.406 174.905 146.721 82.3229 28.6444ZM59.9514 224.706C59.9514 224.706 55.1576 220.607 53.8592 218.507V218.308L59.6518 89.7325C59.6518 89.3326 60.2511 89.3326 60.2511 89.7325L66.0436 218.308V218.507C64.7453 220.607 59.9514 224.706 59.9514 224.706Z" fill="#00ED64"/>
+<path d="M260.501 197.588L215.845 89.2991L215.745 89H181.001V96.279H186.608C188.31 96.279 189.912 96.9771 191.114 98.1736C192.315 99.3702 192.916 100.966 192.916 102.661L191.915 211.647C191.915 215.037 189.112 217.829 185.707 217.929L180 218.029V225.208H213.843V218.029L210.338 217.929C206.934 217.829 204.13 215.037 204.13 211.647V108.943L252.792 225.208C253.492 226.903 255.094 228 256.897 228C258.699 228 260.301 226.903 261.002 225.208L308.562 111.535L309.263 211.647C309.263 215.137 306.459 217.929 302.955 218.029H299.35V225.208H339V218.029H333.593C330.189 218.029 327.385 215.137 327.285 211.747L326.985 102.76C326.985 99.2704 329.788 96.4785 333.193 96.3788L339 96.279V89H305.157L260.501 197.588Z" fill="#00ED64"/>
+<path d="M571.869 216.136C570.764 215.04 570.162 213.546 570.162 211.754V158.369C570.162 148.21 567.151 140.242 561.127 134.565C555.205 128.888 546.973 126 536.734 126C522.378 126 511.035 131.777 503.104 143.131C503.004 143.33 502.703 143.43 502.402 143.43C502.1 143.43 501.9 143.23 501.9 142.932L498.185 128.689H491.961L476 137.753V142.732H480.116C482.023 142.732 483.629 143.23 484.734 144.226C485.838 145.222 486.44 146.716 486.44 148.808V211.654C486.44 213.447 485.838 214.941 484.734 216.036C483.629 217.132 482.124 217.729 480.317 217.729H476.301V225H513.042V217.729H509.027C507.22 217.729 505.714 217.132 504.61 216.036C503.506 214.941 502.903 213.447 502.903 211.654V170.022C502.903 164.743 504.108 159.465 506.317 154.286C508.625 149.206 512.038 144.924 516.556 141.637C521.073 138.35 526.494 136.757 532.718 136.757C539.745 136.757 545.066 138.948 548.378 143.33C551.691 147.712 553.398 153.389 553.398 160.162V211.554C553.398 213.347 552.795 214.841 551.691 215.937C550.587 217.032 549.081 217.63 547.274 217.63H543.259V224.9H580V217.63H575.985C574.479 217.829 573.073 217.231 571.869 216.136Z" fill="#00ED64"/>
+<path d="M907.546 97.212C897.39 91.8041 886.039 89 873.792 89H826V96.3107H830.68C832.472 96.3107 834.065 97.0117 835.658 98.6141C837.152 100.116 837.948 101.819 837.948 103.621V211.379C837.948 213.181 837.152 214.884 835.658 216.386C834.165 217.888 832.472 218.689 830.68 218.689H826V226H873.792C886.039 226 897.39 223.196 907.546 217.788C917.701 212.38 925.966 204.368 931.94 194.154C937.914 183.939 941 171.621 941 157.6C941 143.58 937.914 131.362 931.94 121.047C925.866 110.632 917.701 102.62 907.546 97.212ZM921.784 157.4C921.784 170.219 919.494 181.034 915.013 189.747C910.533 198.46 904.558 204.969 897.19 209.175C889.823 213.382 881.658 215.485 872.896 215.485H863.238C861.446 215.485 859.853 214.784 858.26 213.181C856.766 211.679 855.97 209.977 855.97 208.174V106.526C855.97 104.723 856.667 103.121 858.26 101.518C859.753 100.016 861.446 99.2149 863.238 99.2149H872.896C881.658 99.2149 889.823 101.318 897.19 105.524C904.558 109.73 910.533 116.24 915.013 124.953C919.494 133.665 921.784 144.581 921.784 157.4Z" fill="#00ED64"/>
+<path d="M1053.97 164.711C1049.55 159.603 1041.02 155.297 1030.99 152.993C1044.84 146.083 1051.96 136.369 1051.96 123.851C1051.96 117.041 1050.16 110.932 1046.54 105.724C1042.93 100.517 1037.81 96.3106 1031.29 93.4064C1024.76 90.5022 1017.13 89 1008.5 89H954.402V96.3107H958.718C960.524 96.3107 962.13 97.0117 963.736 98.614C965.242 100.116 966.045 101.819 966.045 103.621V211.379C966.045 213.181 965.242 214.884 963.736 216.386C962.231 217.888 960.524 218.689 958.718 218.689H954V226H1012.72C1021.65 226 1029.98 224.498 1037.51 221.493C1045.04 218.489 1051.06 214.083 1055.38 208.274C1059.79 202.466 1062 195.355 1062 187.143C1061.9 178.33 1059.29 170.819 1053.97 164.711ZM986.621 213.281C985.115 211.779 984.312 210.077 984.312 208.274V159.904H1012.22C1022.05 159.904 1029.58 162.407 1034.8 167.414C1040.02 172.422 1042.63 178.931 1042.63 186.943C1042.63 191.75 1041.42 196.457 1039.22 200.763C1036.91 205.17 1033.49 208.675 1028.88 211.379C1024.36 214.083 1018.74 215.485 1012.22 215.485H991.639C989.833 215.585 988.227 214.784 986.621 213.281ZM984.413 149.588V106.626C984.413 104.823 985.115 103.221 986.721 101.618C988.227 100.116 989.933 99.315 991.74 99.315H1004.99C1014.52 99.315 1021.55 101.719 1025.97 106.325C1030.38 111.032 1032.59 117.041 1032.59 124.452C1032.59 132.063 1030.48 138.172 1026.37 142.779C1022.25 147.285 1016.03 149.588 1007.8 149.588H984.413Z" fill="#00ED64"/>
+<path d="M431.999 132.387C424.329 128.196 415.763 126 406.5 126C397.237 126 388.571 128.096 381.001 132.387C373.331 136.579 367.255 142.667 362.773 150.352C358.291 158.037 356 167.02 356 177C356 186.98 358.291 195.963 362.773 203.648C367.255 211.333 373.331 217.421 381.001 221.613C388.671 225.804 397.237 228 406.5 228C415.763 228 424.429 225.904 431.999 221.613C439.669 217.421 445.745 211.333 450.227 203.648C454.709 195.963 457 186.98 457 177C457 167.02 454.709 158.037 450.227 150.352C445.745 142.667 439.669 136.679 431.999 132.387ZM439.37 177C439.37 189.276 436.382 199.256 430.405 206.442C424.529 213.628 416.461 217.321 406.5 217.321C396.54 217.321 388.471 213.628 382.595 206.442C376.618 199.256 373.63 189.276 373.63 177C373.63 164.724 376.618 154.744 382.595 147.558C388.471 140.372 396.54 136.679 406.5 136.679C416.461 136.679 424.529 140.372 430.405 147.558C436.382 154.843 439.37 164.724 439.37 177Z" fill="#00ED64"/>
+<path d="M784.999 132.387C777.329 128.196 768.763 126 759.5 126C750.237 126 741.571 128.096 734.001 132.387C726.331 136.579 720.255 142.667 715.773 150.352C711.291 158.037 709 167.02 709 177C709 186.98 711.291 195.963 715.773 203.648C720.255 211.333 726.331 217.421 734.001 221.613C741.671 225.804 750.237 228 759.5 228C768.763 228 777.429 225.904 784.999 221.613C792.669 217.421 798.745 211.333 803.227 203.648C807.709 195.963 810 186.98 810 177C810 167.02 807.709 158.037 803.227 150.352C798.745 142.667 792.569 136.679 784.999 132.387ZM792.37 177C792.37 189.276 789.381 199.256 783.405 206.442C777.528 213.628 769.46 217.321 759.5 217.321C749.539 217.321 741.471 213.628 735.595 206.442C729.618 199.256 726.63 189.276 726.63 177C726.63 164.624 729.618 154.744 735.595 147.558C741.471 140.372 749.539 136.679 759.5 136.679C769.46 136.679 777.528 140.372 783.405 147.558C789.282 154.843 792.37 164.724 792.37 177Z" fill="#00ED64"/>
+<path d="M642.64 126C634.614 126 627.292 127.704 620.671 131.113C614.05 134.522 608.834 139.135 605.122 145.05C601.411 150.865 599.505 157.383 599.505 164.301C599.505 170.517 600.909 176.232 603.818 181.346C606.627 186.259 610.439 190.369 615.254 193.778L600.909 213.23C599.103 215.636 598.903 218.844 600.207 221.451C601.611 224.158 604.219 225.763 607.229 225.763H611.342C607.329 228.47 604.119 231.678 601.912 235.488C599.304 239.8 598 244.311 598 248.923C598 257.546 601.812 264.665 609.335 269.979C616.759 275.293 627.191 278 640.332 278C649.461 278 658.188 276.496 666.113 273.588C674.138 270.681 680.658 266.369 685.473 260.755C690.389 255.14 692.897 248.322 692.897 240.501C692.897 232.28 689.887 226.464 682.865 220.85C676.847 216.137 667.417 213.631 655.68 213.631H615.555C615.455 213.631 615.354 213.53 615.354 213.53C615.354 213.53 615.254 213.33 615.354 213.23L625.787 199.193C628.596 200.496 631.204 201.298 633.511 201.799C635.918 202.301 638.627 202.501 641.636 202.501C650.063 202.501 657.687 200.797 664.307 197.388C670.928 193.979 676.245 189.367 680.057 183.451C683.868 177.636 685.774 171.119 685.774 164.201C685.774 156.781 682.163 143.245 672.332 136.327C672.332 136.227 672.433 136.227 672.433 136.227L694 138.633V128.707H659.492C654.075 126.902 648.458 126 642.64 126ZM654.677 188.665C650.865 190.67 646.752 191.773 642.64 191.773C635.919 191.773 630 189.367 624.984 184.654C619.969 179.942 617.461 173.024 617.461 164.201C617.461 155.377 619.969 148.459 624.984 143.747C630 139.034 635.919 136.628 642.64 136.628C646.853 136.628 650.865 137.631 654.677 139.736C658.489 141.741 661.599 144.85 664.107 148.96C666.514 153.071 667.818 158.185 667.818 164.201C667.818 170.317 666.614 175.43 664.107 179.441C661.699 183.551 658.489 186.66 654.677 188.665ZM627.492 225.662H654.677C662.201 225.662 667.016 227.166 670.226 230.375C673.436 233.583 675.041 237.894 675.041 242.908C675.041 250.227 672.132 256.243 666.314 260.755C660.495 265.267 652.671 267.573 643.041 267.573C634.614 267.573 627.592 265.668 622.476 262.058C617.36 258.449 614.752 252.934 614.752 245.916C614.752 241.504 615.956 237.393 618.364 233.784C620.771 230.174 623.68 227.567 627.492 225.662Z" fill="#00ED64"/>
+<path d="M1082.35 224.327C1080.37 223.244 1078.88 221.669 1077.69 219.799C1076.6 217.831 1076 215.764 1076 213.5C1076 211.236 1076.6 209.071 1077.69 207.201C1078.78 205.232 1080.37 203.756 1082.35 202.673C1084.34 201.591 1086.52 201 1089 201C1091.48 201 1093.66 201.591 1095.65 202.673C1097.63 203.756 1099.12 205.331 1100.31 207.201C1101.4 209.169 1102 211.236 1102 213.5C1102 215.764 1101.4 217.929 1100.31 219.799C1099.22 221.768 1097.63 223.244 1095.65 224.327C1093.66 225.409 1091.48 226 1089 226C1086.62 226 1084.34 225.409 1082.35 224.327ZM1094.56 222.85C1096.24 221.965 1097.44 220.587 1098.43 219.012C1099.32 217.339 1099.82 215.468 1099.82 213.402C1099.82 211.335 1099.32 209.465 1098.43 207.791C1097.53 206.118 1096.24 204.839 1094.56 203.953C1092.87 203.067 1091.08 202.575 1089 202.575C1086.92 202.575 1085.13 203.067 1083.44 203.953C1081.76 204.839 1080.56 206.217 1079.57 207.791C1078.68 209.465 1078.18 211.335 1078.18 213.402C1078.18 215.468 1078.68 217.339 1079.57 219.012C1080.47 220.685 1081.76 221.965 1083.44 222.85C1085.13 223.736 1086.92 224.228 1089 224.228C1091.08 224.228 1092.97 223.736 1094.56 222.85ZM1083.64 219.406V218.52L1083.84 218.421H1084.44C1084.63 218.421 1084.83 218.323 1084.93 218.224C1085.13 218.028 1085.13 217.929 1085.13 217.732V208.579C1085.13 208.382 1085.03 208.185 1084.93 208.087C1084.73 207.89 1084.63 207.89 1084.44 207.89H1083.84L1083.64 207.791V206.906L1083.84 206.807H1089C1090.49 206.807 1091.58 207.102 1092.47 207.791C1093.37 208.48 1093.76 209.366 1093.76 210.547C1093.76 211.433 1093.47 212.319 1092.77 212.909C1092.08 213.598 1091.28 213.992 1090.29 214.091L1091.48 214.484L1093.76 218.126C1093.96 218.421 1094.16 218.52 1094.46 218.52H1095.05L1095.15 218.618V219.504L1095.05 219.602H1091.98L1091.78 219.504L1088.6 214.189H1087.81V217.732C1087.81 217.929 1087.91 218.126 1088.01 218.224C1088.21 218.421 1088.31 218.421 1088.5 218.421H1089.1L1089.3 218.52V219.406L1089.1 219.504H1083.84L1083.64 219.406ZM1088.7 213.008C1089.5 213.008 1090.19 212.811 1090.59 212.319C1090.98 211.925 1091.28 211.236 1091.28 210.449C1091.28 209.661 1091.08 209.071 1090.69 208.579C1090.29 208.087 1089.69 207.89 1089 207.89H1088.6C1088.4 207.89 1088.21 207.988 1088.11 208.087C1087.91 208.283 1087.91 208.382 1087.91 208.579V213.008H1088.7Z" fill="#00ED64"/>
+</svg>
+"""
+
+# Temporal logo (currentColor fill — adapts to wrapper color per theme)
+_TEMPORAL_LOGO_SVG = """
+<svg width="200" height="50" viewBox="0 0 1571 395" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Temporal">
+<path fill="currentColor" d="M510.853 115.417V134.708H566.497V283.244H587.451V134.708H643.095V115.417H510.853Z"/>
+<path fill="currentColor" d="M647.427 222.725C647.427 259.371 671.512 284.691 708.362 284.691C735.811 284.691 757.984 267.577 762.801 242.981H742.811C738.716 258.896 723.286 267.087 706.916 267.087C684.036 267.087 668.862 251.172 668.14 228.271V226.583H763.516C763.757 223.689 763.998 220.796 763.998 218.143C763.034 181.731 739.423 159.787 705.712 159.787C671.03 159.787 647.427 184.865 647.427 222.725ZM669.344 210.185C671.271 190.171 687.889 177.149 705.953 177.149C725.454 177.149 740.876 188.965 742.803 210.185H669.344Z"/>
+<path fill="currentColor" d="M936.275 159.787C914.358 159.787 901.111 169.915 893.645 183.177C886.66 167.503 871.968 159.787 854.868 159.787C835.841 159.787 825.484 169.191 818.981 178.113L817.303 161.234H799.232V283.244H818.981V219.349C818.981 194.752 831.265 177.872 851.496 177.872C870.282 177.872 881.121 190.412 881.121 214.526V283.244H900.87V218.384C900.87 193.305 913.394 177.872 933.867 177.872C952.412 177.872 963.009 190.412 963.009 214.526V283.244H982.759V213.32C982.759 174.496 961.805 159.787 936.275 159.787Z"/>
+<path fill="currentColor" d="M1080.79 159.787C1060.08 159.787 1046.83 169.674 1038.64 181.007L1036.96 161.234H1018.89V331.472H1038.64V264.435C1046.11 276.251 1060.08 284.691 1080.79 284.691C1113.78 284.691 1139.8 259.371 1139.8 222.725C1139.8 182.695 1113.78 159.787 1080.79 159.787ZM1078.86 267.087C1054.78 267.087 1038.4 248.278 1038.4 222.243C1038.4 195.958 1054.78 177.39 1078.86 177.39C1102.22 177.39 1119.57 195.958 1119.57 222.725C1119.57 248.519 1102.22 267.087 1078.86 267.087Z"/>
+<path fill="currentColor" d="M1228.73 284.691C1264.62 284.691 1289.66 259.129 1289.66 222.725C1289.66 185.348 1264.62 159.787 1228.73 159.787C1192.84 159.787 1167.79 185.348 1167.79 222.725C1167.79 259.129 1192.84 284.691 1228.73 284.691ZM1228.73 267.087C1204.4 267.087 1188.03 248.037 1188.03 222.725C1188.03 196.44 1204.4 177.39 1228.73 177.39C1253.06 177.39 1269.43 196.44 1269.43 222.725C1269.43 248.037 1253.06 267.087 1228.73 267.087Z"/>
+<path fill="currentColor" d="M1378.91 161.234C1357 161.234 1345.66 170.397 1339.88 179.801L1338.2 161.234H1320.13V283.244H1339.88V221.519C1339.88 201.987 1348.81 180.525 1374.58 180.525H1384.45V161.234H1378.91Z"/>
+<path fill="currentColor" d="M1516.35 264.186C1511.29 264.186 1508.16 262.264 1508.16 256.236V204.157C1508.16 175.461 1491.07 159.787 1459.76 159.787C1430.14 159.787 1410.63 174.014 1407.74 198.128H1427.49C1429.89 185.589 1441.46 177.39 1458.8 177.39C1478.06 177.39 1488.41 187.036 1488.41 202.951V211.391H1453.26C1420.98 211.391 1403.88 224.164 1403.88 248.76C1403.88 271.187 1422.19 284.691 1449.16 284.691C1470.36 284.691 1481.67 275.286 1489.38 264.193C1489.62 276.251 1495.16 283.244 1511.53 283.244H1522.37V264.186H1516.35ZM1488.41 233.086C1488.41 253.583 1475.17 267.811 1450.61 267.811C1434.23 267.811 1423.87 259.612 1423.87 247.555C1423.87 233.568 1433.75 228.03 1451.33 228.03H1488.41V233.086Z"/>
+<path fill="currentColor" d="M1550.39 115.417V283.244H1570.14V115.417H1550.39Z"/>
+<path fill="currentColor" d="M266.428 128.248C257.097 58.3869 233.568 0 197.26 0C161.054 0 137.423 58.3869 128.092 128.248C58.316 137.59 0 161.148 0 197.5C0 233.751 58.316 257.41 128.092 266.752C137.423 336.613 160.952 395 197.26 395C233.467 395 257.097 336.613 266.428 266.752C336.204 257.41 394.52 233.852 394.52 197.5C394.52 161.148 336.204 137.488 266.428 128.248ZM125.861 246.24C59.0259 236.594 19.9795 214.458 19.9795 197.398C19.9795 180.339 58.9245 158.203 125.861 148.557C124.34 164.702 123.63 181.152 123.63 197.398C123.63 213.645 124.34 230.197 125.861 246.24ZM197.26 19.9023C214.299 19.9023 236.408 58.8946 246.043 125.913C229.917 124.389 213.487 123.679 197.26 123.679C181.033 123.679 164.603 124.491 148.478 125.913C158.112 58.9962 180.222 19.9023 197.26 19.9023ZM268.659 246.24C265.414 246.748 251.824 248.271 248.477 248.677C248.173 252.13 246.55 265.635 246.043 268.884C236.408 335.801 214.299 374.895 197.26 374.895C180.222 374.895 158.112 335.902 148.478 268.884C147.97 265.635 146.449 252.028 146.044 248.677C144.522 232.837 143.508 215.778 143.508 197.398C143.508 179.019 144.421 162.062 146.044 146.12C161.865 144.596 178.903 143.581 197.26 143.581C215.617 143.581 232.554 144.495 248.477 146.12C251.925 146.424 265.414 148.049 268.659 148.557C335.494 158.203 374.541 180.339 374.541 197.398C374.541 214.458 335.494 236.594 268.659 246.24Z"/>
+</svg>
+"""
+
+# Collapse multi-line SVG to single line so CommonMark treats the whole header
+# as one HTML block (newlines inside an HTML block can prematurely close it).
+_mdb_svg = _MDB_LOGO_SVG.replace("\n", "")
+_temporal_svg = _TEMPORAL_LOGO_SVG.replace("\n", "")
+
+_HEADER_HTML = (
+    '<div style="display:flex;align-items:center;gap:24px;margin-bottom:8px;">'
+    '<div style="display:flex;align-items:center;gap:24px;">'
+    f'<a href="https://www.mongodb.com/atlas" target="_blank" style="display:inline-flex;align-items:center;text-decoration:none;">{_mdb_svg}</a>'
+    '<span style="color:rgba(255,255,255,0.25);font-size:2rem;font-weight:200;line-height:1;">+</span>'
+    f'<a href="https://temporal.io/" target="_blank" style="display:inline-flex;align-items:center;text-decoration:none;color:#F0F4F8;">{_temporal_svg}</a>'
+    '</div></div>'
+    '<div style="margin-top:8px;margin-bottom:12px;">'
+    '<h1 style="font-family:\'MongoDB Value Serif\',Georgia,serif;font-size:2.4rem;margin:0;padding:0;line-height:1.1;color:#F0F4F8;">'
+    'AI <span style="background:linear-gradient(135deg,#00ED64,#7CF5A5,#0078FF,#00ED64);background-size:300% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:shimmer 6s ease-in-out infinite;">Transaction Processing</span>'
+    '</h1>'
+    '<p style="font-size:0.85rem;color:#C8D5DE;margin:6px 0 0 0;letter-spacing:0.3px;">'
+    'Real-time fraud detection &amp; workflow orchestration with hybrid search'
+    '</p></div>'
+)
+st.markdown(_HEADER_HTML, unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
-    st.title("🏦 AI-Powered Transaction Processing")
-    st.markdown("**Fraud Detection System** with Hybrid Search & Workflow Orchestration")
+    st.empty()
 with col2:
     if st.button("🔄 Refresh", key="refresh_btn"):
         st.session_state.last_refresh = datetime.now()
@@ -300,9 +459,9 @@ with tabs[0]:  # Dashboard
                 # Ensure consistent ordering and colors for decision types
                 decision_types = ['approve', 'reject', 'escalate']
                 decision_colors = {
-                    'approve': '#28a745',  # Green
-                    'reject': '#dc3545',   # Red
-                    'escalate': '#ffc107'  # Yellow/Warning
+                    'approve': '#00ED64',   # MongoDB spring green
+                    'reject': '#E53935',    # Red
+                    'escalate': '#FB8C00',  # Amber/warning
                 }
 
                 # Build ordered data with proper colors
@@ -332,6 +491,7 @@ with tabs[0]:  # Dashboard
                     height=300,
                     showlegend=False
                 )
+                apply_mdb_theme(fig)
                 st.plotly_chart(fig, use_container_width=True)
         
         with col2:
@@ -684,7 +844,7 @@ with tabs[4]:  # Multi-Method Search Demo
                 height=350,
                 showlegend=True
             )
-
+            apply_mdb_theme(fig)
             st.plotly_chart(fig, use_container_width=True)
 
     with search_tabs[1]:  # Vector Similarity
@@ -774,7 +934,7 @@ with tabs[4]:  # Multi-Method Search Demo
                 height=400,
                 showlegend=True
             )
-
+            apply_mdb_theme(fig)
             st.plotly_chart(fig, use_container_width=True)
 
     with search_tabs[2]:  # Traditional Indexes
@@ -850,7 +1010,7 @@ db.transactions.createIndex({
                 yaxis2=dict(title='Storage (MB)', overlaying='y', side='right'),
                 height=350
             )
-
+            apply_mdb_theme(fig)
             st.plotly_chart(fig, use_container_width=True)
 
             # Show sample query
@@ -935,7 +1095,7 @@ db.transactions.createIndex({
                 title="Feature-Based Similarity Scores",
                 height=400
             )
-
+            apply_mdb_theme(fig, polar=True)
             st.plotly_chart(fig, use_container_width=True)
 
     with search_tabs[4]:  # Graph Traversal
@@ -1036,7 +1196,7 @@ db.transactions.createIndex({
                 yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                 margin=dict(l=0, r=0, t=40, b=0)
             )
-
+            apply_mdb_theme(fig)
             st.plotly_chart(fig, use_container_width=True)
 
             # Show network statistics
@@ -1220,9 +1380,13 @@ with tabs[5]:  # Settings
 
 # Footer
 st.divider()
-st.markdown("""
-<div style='text-align: center'>
-    <p>Powered by <b>MongoDB Atlas</b> 🍃 and <b>Temporal Workflows</b> ⚙️</p>
-    <p>AI Analysis by <b>AWS Bedrock / Groq </b> (Claude / OpenAI & VoyageAI / Cohere) 🤖</p>
+_footer_text_color = "#C8D5DE" if st.session_state.get("theme", "Dark") == "Dark" else "#5C6C75"
+_footer_strong_color = "#F0F4F8" if st.session_state.get("theme", "Dark") == "Dark" else "#001E2B"
+st.markdown(f"""
+<div style="text-align:center;color:{_footer_text_color};
+            font-family:'Euclid Circular A',sans-serif;padding:16px 0;">
+    <p>Powered by <b style="color:#00ED64;">MongoDB Atlas</b>
+       and <b style="color:{_footer_strong_color};">Temporal Workflows</b></p>
+    <p style="font-size:0.85rem;">AI Analysis by AWS Bedrock / Groq (Claude / OpenAI &amp; VoyageAI / Cohere)</p>
 </div>
 """, unsafe_allow_html=True)
