@@ -11,6 +11,7 @@ services:
       - .env
     networks:
       - temporal-network
+      - search-community
     restart: unless-stopped
 
   # FastAPI Backend
@@ -34,6 +35,7 @@ services:
       - ./temporal:/app/temporal
     networks:
       - temporal-network
+      - search-community
     restart: unless-stopped
 
   # Streamlit Dashboard
@@ -57,10 +59,15 @@ services:
       - api
     networks:
       - temporal-network
+      - search-community
     restart: unless-stopped
 
 networks:
   temporal-network:
     driver: bridge
     name: temporal-network
+    external: true
+  search-community:
+    driver: bridge
+    name: search-community
     external: true

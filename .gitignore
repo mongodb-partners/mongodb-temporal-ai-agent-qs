@@ -218,3 +218,7 @@ check_*.py
 *.log
 *.pid
 .streamlit/
+
+.mcp.json
+
+.claude

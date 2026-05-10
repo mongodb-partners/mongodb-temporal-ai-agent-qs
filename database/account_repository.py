@@ -160,7 +160,7 @@ class AccountRepository:
                             },
                             "$inc": {
                                 "transaction_count": 1,
-                                "total_withdrawals": float(from_decimal128(amount))  # MongoDB $inc needs float
+                                "total_withdrawals": float(from_decimal128(amount))
                             }
                         },
                         session=session
