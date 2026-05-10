@@ -214,7 +214,14 @@ __marimo__/
 # Project-specific ignores
 docker-compose/
 test_*.py
+!tests/test_*.py
 check_*.py
 *.log
 *.pid
 .streamlit/
+
+.mcp.json
+
+.claude/
+
+.specs/
