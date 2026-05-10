@@ -221,4 +221,6 @@ check_*.py
 
 .mcp.json
 
-.claude
+.claude/
+
+.specs/
