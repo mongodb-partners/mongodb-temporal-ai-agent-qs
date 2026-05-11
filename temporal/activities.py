@@ -523,11 +523,20 @@ class TransactionActivities:
                 embedding, transaction, limit=config.MAX_SIMILAR_CASES
             )
 
-            # Filter by similarity threshold
+            # Filter by similarity threshold. similarity_score may come back as a
+            # string when the aggregation produced Decimal128 components (the shared
+            # serialize_doc helper stringifies Decimal128).
+            def _score(case):
+                raw = case.get("similarity_score", 0)
+                try:
+                    return float(raw) if raw is not None else 0.0
+                except (TypeError, ValueError):
+                    return 0.0
+
             filtered_cases = [
                 case
                 for case in similar_cases
-                if case.get("similarity_score", 0) >= config.SIMILARITY_THRESHOLD
+                if _score(case) >= config.SIMILARITY_THRESHOLD
             ]
 
             activity.logger.info(

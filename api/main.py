@@ -185,7 +185,8 @@ async def get_metrics():
                 "total_amount": {"$sum": "$amount"}
             }}
         ]
-        type_stats = await db.database[config.TRANSACTIONS_COLLECTION].aggregate(pipeline).to_list(None)
+        type_cursor = await db.database[config.TRANSACTIONS_COLLECTION].aggregate(pipeline)
+        type_stats = await type_cursor.to_list(None)
         transactions_by_type = {stat['_id']: stat['count'] for stat in type_stats}
         # Handle Decimal128 values in sum
         from utils.decimal_utils import from_decimal128
@@ -200,7 +201,8 @@ async def get_metrics():
                 "avg_processing_time": {"$avg": "$processing_time_ms"}
             }}
         ]
-        decision_stats = await db.database[config.DECISIONS_COLLECTION].aggregate(decision_pipeline).to_list(None)
+        decision_cursor = await db.database[config.DECISIONS_COLLECTION].aggregate(decision_pipeline)
+        decision_stats = await decision_cursor.to_list(None)
         
         decisions_breakdown = {stat['_id']: stat['count'] for stat in decision_stats if stat['_id']}
         

@@ -15,7 +15,8 @@ This guide provides structured evaluation procedures for the AI-Powered Transact
 - [ ] MongoDB Atlas account configured with connection string
 - [ ] AWS Bedrock credentials set with Claude and Cohere access
 - [ ] Docker Desktop running with 8GB+ RAM allocated
-- [ ] Python 3.11+ installed
+- [ ] Python 3.13+ installed
+- [ ] uv installed (https://docs.astral.sh/uv/)
 - [ ] All three services running (Worker, API, Dashboard)
 - [ ] Test data loaded via `setup_mongodb.py`
 
@@ -28,7 +29,7 @@ curl http://localhost:8080                 # Temporal UI
 curl http://localhost:8501                 # Streamlit dashboard
 
 # Check MongoDB connection
-python -c "from database.connection import get_database; print(get_database().list_collection_names())"
+uv run python -c "from database.connection import get_sync_db; print(get_sync_db().list_collection_names())"
 ```
 
 ## Using the Dashboard UI
@@ -37,7 +38,7 @@ python -c "from database.connection import get_database; print(get_database().li
 
 1. **Start the Streamlit Dashboard:**
    ```bash
-   streamlit run app.py
+   uv run streamlit run app.py
    ```
 
 2. **Open in Browser:**
@@ -97,21 +98,32 @@ python -c "from database.connection import get_database; print(get_database().li
 **Test Steps:**
 1. Submit a standard domestic transfer:
 ```bash
-curl -X POST http://localhost:8000/api/transactions \
+curl -X POST http://localhost:8000/api/transaction \
   -H "Content-Type: application/json" \
   -d '{
-    "transaction_id": "EVAL-001",
+    "transaction_type": "ach",
     "amount": 2500,
     "currency": "USD",
-    "type": "ach_transfer",
-    "source_account": "ACC-EVAL-001",
-    "destination_account": "ACC-EVAL-002",
-    "description": "Payroll deposit"
+    "sender": {
+      "name": "Alice Anderson",
+      "country": "US",
+      "account_number": "ACC-EVAL-001",
+      "customer_id": "CUST-EVAL-001"
+    },
+    "recipient": {
+      "name": "Bob Baker",
+      "country": "US",
+      "account_number": "ACC-EVAL-002"
+    },
+    "description": "Payroll deposit",
+    "reference_number": "EVAL-001"
   }'
 ```
 
-2. Monitor in dashboard (http://localhost:8501)
-3. Verify decision in Temporal UI (http://localhost:8080)
+2. Note the `transaction_id` returned in the response.
+3. Monitor in dashboard (http://localhost:8501).
+4. Verify decision in Temporal UI (http://localhost:8080).
+5. Poll `GET /api/transaction/{transaction_id}` until 200.
 
 **Expected Results:**
 - ✅ Transaction approved automatically
@@ -141,7 +153,7 @@ curl -X POST http://localhost:8000/api/transactions \
 
 **Option B: Using Command Line**
 ```bash
-python -m scripts.advanced_scenarios
+uv run python -m scripts.advanced_scenarios
 # This runs pre-configured fraud detection scenarios
 ```
 
@@ -166,22 +178,31 @@ python -m scripts.advanced_scenarios
 **Test Steps:**
 1. Submit transaction > $50,000:
 ```bash
-curl -X POST http://localhost:8000/api/transactions \
+curl -X POST http://localhost:8000/api/transaction \
   -H "Content-Type: application/json" \
   -d '{
-    "transaction_id": "EVAL-HIGH-001",
+    "transaction_type": "wire_transfer",
     "amount": 75000,
     "currency": "USD",
-    "type": "wire_transfer",
-    "source_account": "ACC-CORP-001",
-    "destination_account": "ACC-VENDOR-001",
-    "description": "Q4 vendor payment"
+    "sender": {
+      "name": "Acme Corp",
+      "country": "US",
+      "account_number": "ACC-CORP-001",
+      "customer_id": "CUST-CORP-001"
+    },
+    "recipient": {
+      "name": "Vendor LLC",
+      "country": "US",
+      "account_number": "ACC-VENDOR-001"
+    },
+    "description": "Q4 vendor payment",
+    "reference_number": "EVAL-HIGH-001"
   }'
 ```
 
-2. Check "Pending Manager Approval" queue in dashboard
-3. Approve via dashboard interface
-4. Verify workflow completion
+2. Check "Pending Manager Approval" queue in dashboard.
+3. Approve via dashboard interface (sends an `approve(manager_name)` signal to the workflow).
+4. Verify workflow completion in the Temporal UI.
 
 **Expected Results:**
 - ✅ Transaction routed to manager queue
@@ -202,16 +223,25 @@ curl -X POST http://localhost:8000/api/transactions \
 1. Submit 5 transactions within 60 seconds:
 ```bash
 for i in {1..5}; do
-  curl -X POST http://localhost:8000/api/transactions \
+  curl -X POST http://localhost:8000/api/transaction \
     -H "Content-Type: application/json" \
     -d "{
-      \"transaction_id\": \"EVAL-VEL-$i\",
+      \"transaction_type\": \"ach\",
       \"amount\": 1000,
       \"currency\": \"USD\",
-      \"type\": \"debit_card\",
-      \"source_account\": \"ACC-VELOCITY-TEST\",
-      \"destination_account\": \"ACC-MERCHANT-$i\",
-      \"description\": \"Purchase $i\"
+      \"sender\": {
+        \"name\": \"Velocity Test\",
+        \"country\": \"US\",
+        \"account_number\": \"ACC-VELOCITY-TEST\",
+        \"customer_id\": \"CUST-VELOCITY\"
+      },
+      \"recipient\": {
+        \"name\": \"Merchant $i\",
+        \"country\": \"US\",
+        \"account_number\": \"ACC-MERCHANT-$i\"
+      },
+      \"description\": \"Purchase $i\",
+      \"reference_number\": \"EVAL-VEL-$i\"
     }"
   sleep 10
 done
@@ -236,24 +266,36 @@ done
 **Objective:** Test compliance checks for high-risk countries
 
 **Test Steps:**
-1. Submit transaction with high-risk country:
+1. Submit a transaction to a high-risk country:
 ```bash
-curl -X POST http://localhost:8000/api/transactions \
+curl -X POST http://localhost:8000/api/transaction \
   -H "Content-Type: application/json" \
   -d '{
-    "transaction_id": "EVAL-SANC-001",
+    "transaction_type": "international",
     "amount": 5000,
     "currency": "USD",
-    "type": "international_wire",
-    "source_account": "ACC-US-001",
-    "destination_account": "ACC-FOREIGN-001",
-    "destination_country": "IR",
-    "description": "International transfer"
+    "sender": {
+      "name": "George Green",
+      "country": "US",
+      "account_number": "ACC-US-001",
+      "customer_id": "CUST-US-001"
+    },
+    "recipient": {
+      "name": "Hannah Harris",
+      "country": "RU",
+      "account_number": "ACC-FOREIGN-001"
+    },
+    "description": "International transfer",
+    "reference_number": "EVAL-SANC-001"
   }'
 ```
 
-2. Verify immediate rejection
-3. Check compliance flag in decision
+2. Poll `GET /api/transaction/{transaction_id}` — expect a `reject`
+   decision with `risk_factors` including `compliance_violation` and
+   `sanctions_risk`.
+3. Check the Temporal UI for the rejection path through
+   `ai_decision_analysis` (compliance check failed → 100% confidence
+   reject).
 
 **Expected Results:**
 - ✅ Transaction rejected immediately
@@ -273,21 +315,31 @@ curl -X POST http://localhost:8000/api/transactions \
 **Test Steps:**
 1. Submit a transaction with specific pattern:
 ```bash
-curl -X POST http://localhost:8000/api/transactions \
+curl -X POST http://localhost:8000/api/transaction \
   -H "Content-Type: application/json" \
   -d '{
-    "transaction_id": "EVAL-VEC-001",
+    "transaction_type": "ach",
     "amount": 3500,
     "currency": "USD",
-    "type": "ach_transfer",
-    "source_account": "ACC-TEST-001",
-    "destination_account": "ACC-CASINO-001",
-    "description": "Gaming payment"
+    "sender": {
+      "name": "Test Customer",
+      "country": "US",
+      "account_number": "ACC-TEST-001",
+      "customer_id": "CUST-TEST"
+    },
+    "recipient": {
+      "name": "Casino Royale",
+      "country": "US",
+      "account_number": "ACC-CASINO-001"
+    },
+    "description": "Gaming payment",
+    "reference_number": "EVAL-VEC-001"
   }'
 ```
 
-2. Check similar transactions in dashboard
-3. Verify vector search results
+2. Check similar transactions in the dashboard's "Search Methods Demo" tab.
+3. Verify the workflow's `find_similar_transactions` activity surfaced
+   precedents from the seeded gaming-related transactions.
 
 **Expected Results:**
 - ✅ 5+ similar transactions found
@@ -307,28 +359,45 @@ curl -X POST http://localhost:8000/api/transactions \
 **Test Steps:**
 1. Start a long-running transaction:
 ```bash
-curl -X POST http://localhost:8000/api/transactions \
+curl -X POST http://localhost:8000/api/transaction \
   -H "Content-Type: application/json" \
   -d '{
-    "transaction_id": "EVAL-RESIL-001",
+    "transaction_type": "wire_transfer",
     "amount": 10000,
     "currency": "USD",
-    "type": "wire_transfer",
-    "source_account": "ACC-TEST-RESIL",
-    "destination_account": "ACC-DEST-RESIL"
+    "sender": {
+      "name": "Resil Sender",
+      "country": "US",
+      "account_number": "ACC-TEST-RESIL",
+      "customer_id": "CUST-RESIL"
+    },
+    "recipient": {
+      "name": "Resil Recipient",
+      "country": "US",
+      "account_number": "ACC-DEST-RESIL"
+    },
+    "reference_number": "EVAL-RESIL-001"
   }'
 ```
 
-2. Kill the worker process:
+2. Kill the worker process (local install):
 ```bash
 # Find and kill the worker process
 ps aux | grep "run_worker"
 kill -9 [PID]
 ```
-
-3. Restart the worker:
+Or, under Docker:
 ```bash
-python -m temporal.run_worker
+docker compose stop temporal-worker
+```
+
+3. Restart the worker (local):
+```bash
+uv run python -m temporal.run_worker
+```
+Or, under Docker:
+```bash
+docker compose start temporal-worker
 ```
 
 4. Verify transaction completes
@@ -351,16 +420,25 @@ python -m temporal.run_worker
 **Test Steps:**
 1. Submit medium-confidence transaction:
 ```bash
-curl -X POST http://localhost:8000/api/transactions \
+curl -X POST http://localhost:8000/api/transaction \
   -H "Content-Type: application/json" \
   -d '{
-    "transaction_id": "EVAL-REVIEW-001",
+    "transaction_type": "wire_transfer",
     "amount": 8000,
     "currency": "USD",
-    "type": "wire_transfer",
-    "source_account": "ACC-NEW-001",
-    "destination_account": "ACC-OFFSHORE-001",
-    "description": "Investment transfer"
+    "sender": {
+      "name": "New Account",
+      "country": "US",
+      "account_number": "ACC-NEW-001",
+      "customer_id": "CUST-NEW"
+    },
+    "recipient": {
+      "name": "Offshore Holdings",
+      "country": "KY",
+      "account_number": "ACC-OFFSHORE-001"
+    },
+    "description": "Investment transfer",
+    "reference_number": "EVAL-REVIEW-001"
   }'
 ```
 
@@ -384,13 +462,29 @@ curl -X POST http://localhost:8000/api/transactions \
 **Objective:** Test system performance under load
 
 **Test Steps:**
-1. Run batch submission script:
+1. Run batch submission:
 ```bash
-# Submit multiple transactions via API
+# Submit 20 transactions via the API
 for i in {1..20}; do
-  curl -X POST http://localhost:8000/api/transactions \
+  curl -s -X POST http://localhost:8000/api/transaction \
     -H "Content-Type: application/json" \
-    -d "{\"transaction_id\": \"BATCH-$i\", \"amount\": $((RANDOM % 10000)), \"type\": \"ach_transfer\", \"source_account\": \"ACC-$i\", \"destination_account\": \"ACC-DEST-$i\"}"
+    -d "{
+      \"transaction_type\": \"ach\",
+      \"amount\": $((RANDOM % 10000)),
+      \"currency\": \"USD\",
+      \"sender\": {
+        \"name\": \"Sender $i\",
+        \"country\": \"US\",
+        \"account_number\": \"ACC-$i\",
+        \"customer_id\": \"CUST-$i\"
+      },
+      \"recipient\": {
+        \"name\": \"Recipient $i\",
+        \"country\": \"US\",
+        \"account_number\": \"ACC-DEST-$i\"
+      },
+      \"reference_number\": \"BATCH-$i\"
+    }" > /dev/null
 done
 ```
 
@@ -414,11 +508,12 @@ done
 **Objective:** Verify cost savings calculations
 
 **Test Steps:**
-1. Process 50 mixed transactions:
+1. Process mixed transactions:
 ```bash
-# Process mixed transaction types
-python -m scripts.advanced_scenarios
-# Monitor metrics in dashboard at http://localhost:8501
+# Process pre-configured advanced scenarios
+uv run python -m scripts.advanced_scenarios
+# Monitor metrics in dashboard at http://localhost:8501,
+# or query GET http://localhost:8000/api/metrics directly.
 ```
 
 2. Check cost metrics in dashboard
@@ -499,23 +594,10 @@ Navigate to the "Search Methods Demo" tab to see how the system combines multipl
 
 1. Navigate to http://localhost:8000/docs
 2. Test each endpoint:
-   - `POST /api/transactions` - Submit transaction
-   - `GET /api/transactions/{id}` - Get status
-   - `GET /api/workflows` - List workflows
-   - `POST /api/reviews/{id}/decision` - Submit review
-
-### Postman Collection
-
-Import the provided Postman collection:
-```bash
-# Location: ./tests/postman/transaction-api.json
-```
-
-Test scenarios include:
-- Happy path flows
-- Error handling
-- Edge cases
-- Performance tests
+   - `POST /api/transaction` — submit a transaction
+   - `GET /api/transaction/{transaction_id}` — fetch the AI decision
+   - `GET /api/metrics` — aggregate stats
+   - `GET /health` — service + dependency status
 
 ## MongoDB Verification
 
@@ -605,7 +687,7 @@ db.transactions.getIndexes()
 | Dashboard not updating | Refresh browser, check API connection |
 | MongoDB connection errors | Verify IP whitelist in Atlas |
 | AI timeouts | Check AWS credentials and Bedrock access |
-| Vector search no results | Run `python -m scripts.setup_mongodb` to rebuild index |
+| Vector search no results | Run `uv run python -m scripts.setup_mongodb` to rebuild index |
 
 ## Post-Evaluation Steps
 

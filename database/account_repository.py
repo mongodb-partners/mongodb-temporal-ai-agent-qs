@@ -160,7 +160,7 @@ class AccountRepository:
                             },
                             "$inc": {
                                 "transaction_count": 1,
-                                "total_withdrawals": float(from_decimal128(amount))
+                                "total_withdrawals": to_decimal128(amount)
                             }
                         },
                         session=session
@@ -196,7 +196,7 @@ class AccountRepository:
                             },
                             "$inc": {
                                 "transaction_count": 1,
-                                "total_deposits": float(from_decimal128(amount))  # MongoDB $inc needs float
+                                "total_deposits": to_decimal128(amount)
                             }
                         },
                         session=session
@@ -331,11 +331,11 @@ class AccountRepository:
             expires_at=datetime.now(timezone.utc) + timedelta(hours=duration_hours)
         )
         
-        # Update available balance
+        # Update available balance — keep Decimal128 type by inc'ing with a negative Decimal128
         db_sync[config.ACCOUNTS_COLLECTION].update_one(
             {"account_number": account_number},
             {
-                "$inc": {"available_balance": -float(amount_decimal)},  # MongoDB $inc needs float
+                "$inc": {"available_balance": to_decimal128(-amount_decimal)},
                 "$push": {"holds": hold.model_dump()}
             }
         )
@@ -368,19 +368,19 @@ class AccountRepository:
             }
         )
         
-        # Update account available balance
-        # Convert Decimal128 to float for MongoDB $inc operation and formatting
-        from utils.decimal_utils import from_decimal128
-        amount_float = float(from_decimal128(hold["amount"]))
+        # Update account available balance — preserve Decimal128 type
+        amount_decimal = from_decimal128(hold["amount"])
 
         db_sync[config.ACCOUNTS_COLLECTION].update_one(
             {"account_number": hold["account_number"]},
             {
-                "$inc": {"available_balance": amount_float},
+                "$inc": {"available_balance": to_decimal128(amount_decimal)},
                 "$pull": {"holds": {"hold_id": hold_id}}
             }
         )
-        logger.info(f"Released hold {hold_id} for ${amount_float:.2f} on account {hold['account_number']}")
+        logger.info(
+            f"Released hold {hold_id} for ${float(amount_decimal):.2f} on account {hold['account_number']}"
+        )
         
         return True
     

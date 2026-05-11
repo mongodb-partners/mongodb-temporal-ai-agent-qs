@@ -52,8 +52,8 @@ logs/
 docker-compose/
 .dockerignore
 
-# Documentation
-README.md
+# Documentation — keep README.md in the build context because
+# pyproject.toml's [project].readme references it during metadata resolution.
 docs/
 
 # Testing

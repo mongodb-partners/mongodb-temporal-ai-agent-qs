@@ -1,0 +1,83 @@
+[project]
+name = "maap-temporal-ai-agent-qs"
+version = "0.1.0"
+description = "MongoDB Atlas + Temporal + AI agent for transaction processing PoV"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "Apache-2.0" }
+authors = [{ name = "MongoDB Partners" }]
+
+dependencies = [
+    "streamlit>=1.49.1",
+    "fastapi>=0.116.2",
+    "uvicorn>=0.35.0",
+    "temporalio>=1.17.0",
+    "pymongo>=4.16",
+    "boto3>=1.40.32",
+    "pydantic>=2.11.9",
+    "pandas>=2.3.2",
+    "plotly>=6.3.0",
+    "python-dotenv>=1.1.1",
+    "httpx>=0.28.1",
+    "networkx>=3.5",
+    "voyageai>=0.3.5",
+    "groq>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Treat the repo as a multi-package project; ship the modules used at runtime.
+packages = ["api", "ai", "database", "services", "temporal", "utils", "scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "ai",
+    "api",
+    "database",
+    "services",
+    "temporal",
+    "utils",
+]
+omit = [
+    "app.py",
+    "scripts/*",
+    "temporal/run_worker.py",
+    "tests/*",
+    "**/__init__.py",
+    ".venv/*",
+    "venv/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+fail_under = 95
+
+[dependency-groups]
+dev = [
+    "coverage>=7.14.0",
+    "mongomock>=4.3.0",
+    "pytest-cov>=7.1.0",
+    "testcontainers>=4.14.2",
+]

@@ -8,7 +8,7 @@ The AI-Powered Transaction Processing System includes a comprehensive Streamlit 
 
 1. **Start the Dashboard**
    ```bash
-   streamlit run app.py
+   uv run streamlit run app.py
    ```
 
 2. **Open in Browser**
@@ -255,20 +255,30 @@ This tab showcases the hybrid search capabilities:
 While not shown in UI, you can submit custom transactions via API:
 
 ```bash
-curl -X POST http://localhost:8000/api/transactions \
+curl -X POST http://localhost:8000/api/transaction \
   -H "Content-Type: application/json" \
   -d '{
-    "transaction_id": "CUSTOM-001",
+    "transaction_type": "wire_transfer",
     "amount": 10000,
     "currency": "USD",
-    "type": "wire_transfer",
-    "source_account": "ACC-001",
-    "destination_account": "ACC-002",
+    "sender": {
+      "name": "Alice Anderson",
+      "country": "US",
+      "account_number": "ACC-001",
+      "customer_id": "CUST-001"
+    },
+    "recipient": {
+      "name": "Bob Baker",
+      "country": "GB",
+      "account_number": "ACC-002"
+    },
     "description": "Custom test transaction"
   }'
 ```
 
-Then monitor it through the dashboard.
+The response includes a generated `transaction_id` and `workflow_id`.
+Poll `GET /api/transaction/{transaction_id}` for the decision, or
+monitor it through the dashboard.
 
 ### Viewing Historical Data
 

@@ -5,23 +5,15 @@ set -e
 echo "🚀 Setting up Transaction AI PoV Application"
 echo "=========================================="
 
-# Check Python version
-python3 --version
+# Require uv (https://docs.astral.sh/uv/).
+if ! command -v uv >/dev/null 2>&1; then
+    echo "❌ uv is not installed. Install it from https://docs.astral.sh/uv/getting-started/installation/"
+    exit 1
+fi
 
-# Create virtual environment
-echo "📦 Creating virtual environment..."
-python3 -m venv venv
-
-# Activate virtual environment
-echo "🔧 Activating virtual environment..."
-source venv/bin/activate
-
-# Upgrade pip
-pip install --upgrade pip
-
-# Install requirements
-echo "📚 Installing dependencies..."
-pip install -r requirements.txt
+# Sync dependencies (creates .venv from uv.lock; --extra dev includes pytest).
+echo "📚 Installing dependencies via uv ..."
+uv sync --frozen --extra dev
 
 # Check for .env file
 if [ ! -f ".env" ]; then
@@ -64,9 +56,9 @@ sleep 10
 
 # Setup MongoDB
 echo "🗄️ Setting up MongoDB collections and indexes..."
-python -m scripts.setup_mongodb || {
+uv run python -m scripts.setup_mongodb || {
     echo "⚠️  MongoDB setup failed. Check your connection string."
-    echo "   You can retry with: python -m scripts.setup_mongodb"
+    echo "   You can retry with: uv run python -m scripts.setup_mongodb"
 }
 
 # Function to open URL in browser
@@ -93,17 +85,17 @@ echo "================================"
 
 # Start Temporal Worker in background
 echo "Starting Temporal Worker..."
-python -m temporal.run_worker &
+uv run python -m temporal.run_worker &
 WORKER_PID=$!
 
 # Start API server in background
 echo "Starting API server..."
-uvicorn api.main:app --reload --port 8000 &
+uv run uvicorn api.main:app --reload --port 8000 &
 API_PID=$!
 
 # Start Streamlit in background
 echo "Starting Streamlit dashboard..."
-streamlit run app.py --server.port 8501 --server.address 0.0.0.0 &
+uv run streamlit run app.py --server.port 8501 --server.address 0.0.0.0 &
 STREAMLIT_PID=$!
 
 # Function to cleanup on exit

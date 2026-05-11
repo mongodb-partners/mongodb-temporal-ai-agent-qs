@@ -55,7 +55,7 @@ class EmbeddingClient:
 
     async def get_embedding(self, text: str) -> EmbeddingResult:
         """
-        Generate embedding using Voyage finance-2 with Cohere fallback.
+        Generate embedding using Voyage (primary) with Cohere fallback.
 
         Args:
             text: Text to embed
@@ -84,17 +84,28 @@ class EmbeddingClient:
         raise Exception("No embedding providers available")
 
     async def _get_voyage_embedding(self, text: str) -> EmbeddingResult:
-        """Generate embedding using Voyage finance-2 model."""
+        """Generate embedding using the configured Voyage model.
+
+        Forwards `output_dimension` so the produced vector matches the Atlas
+        vector index dimension (1024). Voyage 3-family models (including
+        voyage-4) honour this parameter; older models that do not understand
+        it will simply ignore it.
+        """
         try:
             result = self._voyage_client.embed(
                 texts=[text],
                 model=config.VOYAGE_MODEL,
-                input_type="document"
+                input_type="document",
+                output_dimension=config.VOYAGE_OUTPUT_DIMENSION,
             )
 
             embedding = result.embeddings[0]
 
-            logger.debug(f"Successfully generated Voyage embedding with {len(embedding)} dimensions")
+            logger.debug(
+                "Generated Voyage embedding (model=%s, dim=%d)",
+                config.VOYAGE_MODEL,
+                len(embedding),
+            )
 
             return EmbeddingResult(
                 embedding=embedding,

@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import AsyncMongoClient
 from datetime import datetime, timedelta, timezone
 import random
 import uuid
@@ -11,14 +11,41 @@ from typing import List, Dict, Any
 from bson import Decimal128
 from utils.config import config
 from utils.decimal_utils import to_decimal128
+from database.connection import (
+    MONGO_CLIENT_OPTIONS,
+    create_indexes as _runtime_create_indexes,
+    db as _runtime_db,
+)
 from database.schemas import (
     Customer, Rule, RuleStatus, Transaction, TransactionDecision,
     HumanReview, Notification, AuditEvent, SystemMetric,
     TransactionType, TransactionStatus, DecisionType, RiskLevel
 )
 from services.rule_engine import RuleEngine
+from ai.embedding_client import embedding_client
 from dotenv import load_dotenv
 load_dotenv(override=True)
+
+
+async def _seed_embedding(transaction: Dict[str, Any]):
+    """Generate a real embedding for a seed transaction.
+
+    Returns ``(embedding, model)`` on success, or ``None`` if both Voyage
+    and Cohere fail (REQ-E-105). Callers should attach the tuple's two
+    elements as ``embedding`` and ``embedding_model`` on the seed dict, or
+    skip both fields when ``None`` is returned.
+    """
+    try:
+        text = embedding_client.prepare_transaction_text(transaction)
+        result = await embedding_client.get_embedding(text)
+        return result.embedding, result.model
+    except Exception as exc:
+        logger.warning(
+            "Could not generate seed embedding for %s: %s",
+            transaction.get("transaction_id", "?"),
+            exc,
+        )
+        return None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,10 +53,14 @@ logger = logging.getLogger(__name__)
 async def setup_collections():
     """Create MongoDB collections and indexes."""
     try:
-        # Connect to MongoDB
-        client = AsyncIOMotorClient(config.MONGODB_URI)
+        # Connect to MongoDB with the same tuned options the app uses.
+        client = AsyncMongoClient(config.MONGODB_URI, **MONGO_CLIENT_OPTIONS)
         db = client[config.MONGODB_DB_NAME]
-        
+        # Wire the shared `db` object so the delegated create_indexes() runs against
+        # this connection.
+        _runtime_db.client = client
+        _runtime_db.database = db
+
         logger.info("Connected to MongoDB Atlas")
         
         # Create collections if they don't exist
@@ -72,101 +103,19 @@ async def setup_collections():
         logger.error(f"Error setting up MongoDB: {e}")
         raise
     finally:
-        client.close()
+        await client.close()
 
 async def create_indexes(db):
-    """Create all necessary indexes."""
-    logger.info("Creating indexes...")
-    
-    # Customer indexes
-    await db[config.CUSTOMERS_COLLECTION].create_index([("customer_id", 1)], unique=True)
-    await db[config.CUSTOMERS_COLLECTION].create_index([("legal_name", 1)])
-    await db[config.CUSTOMERS_COLLECTION].create_index([("status", 1)])
-    
-    # Transaction indexes
-    await db[config.TRANSACTIONS_COLLECTION].create_index([("transaction_id", 1)], unique=True)
-    await db[config.TRANSACTIONS_COLLECTION].create_index([("status", 1), ("created_at", -1)])
-    await db[config.TRANSACTIONS_COLLECTION].create_index([("transaction_type", 1)])
-    await db[config.TRANSACTIONS_COLLECTION].create_index([("amount", 1)])
-    await db[config.TRANSACTIONS_COLLECTION].create_index([("sender.customer_id", 1)])
-    await db[config.TRANSACTIONS_COLLECTION].create_index([("created_at", -1)])
+    """Create all necessary indexes by delegating to the runtime source of truth.
 
-    # Additional indexes for hybrid search and graph traversal
-    await db[config.TRANSACTIONS_COLLECTION].create_index([
-        ("transaction_type", 1),
-        ("amount", 1),
-        ("sender.country", 1),
-        ("recipient.country", 1)
-    ], name="hybrid_search_index")
-
-    # Indexes for graph traversal
-    await db[config.TRANSACTIONS_COLLECTION].create_index([("sender.account_number", 1)])
-    await db[config.TRANSACTIONS_COLLECTION].create_index([("recipient.account_number", 1)])
-    await db[config.TRANSACTIONS_COLLECTION].create_index([
-        ("sender.account_number", 1),
-        ("timestamp", -1)
-    ], name="graph_sender_time_index")
-    await db[config.TRANSACTIONS_COLLECTION].create_index([
-        ("recipient.account_number", 1),
-        ("timestamp", -1)
-    ], name="graph_recipient_time_index")
-    
-    # Decision indexes
-    await db[config.DECISIONS_COLLECTION].create_index([("transaction_id", 1)])
-    await db[config.DECISIONS_COLLECTION].create_index([("decision", 1), ("created_at", -1)])
-    await db[config.DECISIONS_COLLECTION].create_index([("confidence_score", 1)])
-    await db[config.DECISIONS_COLLECTION].create_index([("risk_score", 1)])
-    
-    # Rule indexes
-    await db[config.RULES_COLLECTION].create_index([("rule_id", 1)], unique=True)
-    await db[config.RULES_COLLECTION].create_index([("status", 1), ("priority", -1)])
-    await db[config.RULES_COLLECTION].create_index([("category", 1)])
-    
-    # Human review indexes
-    await db[config.HUMAN_REVIEWS_COLLECTION].create_index([("transaction_id", 1)])
-    await db[config.HUMAN_REVIEWS_COLLECTION].create_index([("status", 1), ("priority", -1)])
-    await db[config.HUMAN_REVIEWS_COLLECTION].create_index([("assigned_to", 1)])
-    await db[config.HUMAN_REVIEWS_COLLECTION].create_index([("sla_deadline", 1)])
-    
-    # Notification indexes
-    await db[config.NOTIFICATIONS_COLLECTION].create_index([("notification_id", 1)], unique=True)
-    await db[config.NOTIFICATIONS_COLLECTION].create_index([("status", 1), ("created_at", 1)])
-    await db[config.NOTIFICATIONS_COLLECTION].create_index([("transaction_id", 1)])
-    
-    # Audit indexes
-    await db[config.AUDIT_EVENTS_COLLECTION].create_index([("timestamp", -1)])
-    await db[config.AUDIT_EVENTS_COLLECTION].create_index([("transaction_id", 1)])
-    await db[config.AUDIT_EVENTS_COLLECTION].create_index([("event_type", 1)])
-    
-    # Metrics indexes with TTL (30 days)
-    await db[config.SYSTEM_METRICS_COLLECTION].create_index(
-        [("timestamp", 1)],
-        expireAfterSeconds=2592000
-    )
-    await db[config.SYSTEM_METRICS_COLLECTION].create_index([("metric_name", 1), ("timestamp", -1)])
-
-    # Account indexes
-    await db[config.ACCOUNTS_COLLECTION].create_index([("account_number", 1)], unique=True)
-    await db[config.ACCOUNTS_COLLECTION].create_index([("customer_id", 1)])
-    await db[config.ACCOUNTS_COLLECTION].create_index([("status", 1)])
-
-    # Journal indexes for ACID transactions
-    await db[config.JOURNAL_COLLECTION].create_index([("journal_id", 1)], unique=True)
-    await db[config.JOURNAL_COLLECTION].create_index([("transaction_id", 1)])
-    await db[config.JOURNAL_COLLECTION].create_index([("account_number", 1), ("timestamp", -1)])
-    await db[config.JOURNAL_COLLECTION].create_index([("status", 1)])
-
-    # Balance update indexes
-    await db[config.BALANCE_UPDATES_COLLECTION].create_index([("update_id", 1)], unique=True)
-    await db[config.BALANCE_UPDATES_COLLECTION].create_index([("account_number", 1), ("timestamp", -1)])
-    await db[config.BALANCE_UPDATES_COLLECTION].create_index([("transaction_id", 1)])
-
-    # Hold indexes
-    await db[config.HOLDS_COLLECTION].create_index([("hold_id", 1)], unique=True)
-    await db[config.HOLDS_COLLECTION].create_index([("account_number", 1), ("status", 1)])
-    await db[config.HOLDS_COLLECTION].create_index([("transaction_id", 1)])
-    await db[config.HOLDS_COLLECTION].create_index([("expires_at", 1)])
-
+    This used to duplicate the full index list. To keep one source of truth
+    we now call `database.connection.create_indexes`, which the API and worker
+    also call on startup. The argument is accepted for backwards compatibility
+    but ignored — the runtime function uses the shared `db` object that was
+    wired up in `setup_collections`.
+    """
+    logger.info("Creating indexes via database.connection.create_indexes ...")
+    await _runtime_create_indexes()
     logger.info("All indexes created successfully")
 
 async def create_vector_search_index(db):
@@ -202,8 +151,11 @@ async def create_vector_search_index(db):
             type="vectorSearch"
         )
         
-        # Check if index already exists
-        existing_indexes = await collection.list_search_indexes().to_list()
+        # Check if index already exists. PyMongo's AsyncMongoClient
+        # returns a coroutine from list_search_indexes(); split into two
+        # awaits.
+        cursor = await collection.list_search_indexes()
+        existing_indexes = await cursor.to_list()
         index_exists = any(idx.get("name") == config.VECTOR_SEARCH_INDEX for idx in existing_indexes)
         
         if index_exists:
@@ -221,7 +173,8 @@ async def create_vector_search_index(db):
         elapsed_time = 0
         
         while elapsed_time < max_wait_time:
-            indices = await collection.list_search_indexes(result).to_list()
+            cursor = await collection.list_search_indexes(result)
+            indices = await cursor.to_list()
             if indices and indices[0].get("queryable"):
                 logger.info(f"Vector search index '{result}' is ready for querying.")
                 return
@@ -261,69 +214,140 @@ async def create_vector_search_index(db):
         logger.info(f"Manual index configuration: {vector_index_config}")
 
 async def insert_sample_data(db):
-    """Insert comprehensive sample data for all scenarios."""
+    """Insert comprehensive sample data for all scenarios.
 
-    # Check if we already have sample data
-    existing_customers = await db[config.CUSTOMERS_COLLECTION].count_documents({})
-    if existing_customers > 0:
-        logger.info("Sample data already exists, skipping...")
-        return
+    Idempotent: each collection is seeded only if empty, so re-running setup
+    against a partial state recovers cleanly. Always finishes by running the
+    vector-search self-check (REQ-R-105) — even when no data was inserted —
+    so fresh deployments and re-runs alike get a loud warning if search is
+    broken.
+    """
 
-    logger.info("Creating comprehensive test data for all scenarios...")
-    
-    # Comprehensive customer profiles for all test scenarios
+    async def _is_empty(coll: str) -> bool:
+        return (await db[coll].count_documents({}, limit=1)) == 0
+
     customers = await create_test_customers()
 
-    # Insert customers
-    customer_docs = [c.model_dump() for c in customers]
-    await db[config.CUSTOMERS_COLLECTION].insert_many(customer_docs)
-    logger.info(f"Inserted {len(customers)} customers")
+    if await _is_empty(config.CUSTOMERS_COLLECTION):
+        await db[config.CUSTOMERS_COLLECTION].insert_many(
+            [c.model_dump() for c in customers]
+        )
+        logger.info(f"Inserted {len(customers)} customers")
+    else:
+        logger.info("customers collection already populated, skipping")
 
-    # Create accounts for customers
-    accounts = await create_test_accounts(customers)
-    await db[config.ACCOUNTS_COLLECTION].insert_many(accounts)
-    logger.info(f"Inserted {len(accounts)} accounts")
+    if await _is_empty(config.ACCOUNTS_COLLECTION):
+        accounts = await create_test_accounts(customers)
+        await db[config.ACCOUNTS_COLLECTION].insert_many(accounts)
+        logger.info(f"Inserted {len(accounts)} accounts")
+    else:
+        logger.info("accounts collection already populated, skipping")
 
-    # Insert default rules
-    default_rules = RuleEngine.get_default_rules()
-    rule_docs = [r.model_dump() for r in default_rules]
-    await db[config.RULES_COLLECTION].insert_many(rule_docs)
-    logger.info(f"Inserted {len(default_rules)} default rules")
+    if await _is_empty(config.RULES_COLLECTION):
+        default_rules = RuleEngine.get_default_rules()
+        await db[config.RULES_COLLECTION].insert_many(
+            [r.model_dump() for r in default_rules]
+        )
+        logger.info(f"Inserted {len(default_rules)} default rules")
+    else:
+        logger.info("rules collection already populated, skipping")
 
-    # Create comprehensive test transactions for all scenarios
-    test_transactions = await create_comprehensive_test_transactions(customers)
-    test_decisions = await create_test_decisions(test_transactions)
-    test_reviews = await create_test_human_reviews(test_transactions)
-    test_notifications = await create_test_notifications(test_transactions)
-    test_audit_events = await create_test_audit_events(test_transactions)
-    test_metrics = await create_test_system_metrics()
+    # Transactions + downstream data are seeded as a unit because decisions,
+    # reviews, notifications, and audit events all reference the transaction
+    # IDs generated in this run.
+    if await _is_empty(config.TRANSACTIONS_COLLECTION):
+        test_transactions = await create_comprehensive_test_transactions(customers)
+        test_decisions = await create_test_decisions(test_transactions)
+        test_reviews = await create_test_human_reviews(test_transactions)
+        test_notifications = await create_test_notifications(test_transactions)
+        test_audit_events = await create_test_audit_events(test_transactions)
 
-    # Insert all test data
-    if test_transactions:
-        await db[config.TRANSACTIONS_COLLECTION].insert_many(test_transactions)
-        logger.info(f"Inserted {len(test_transactions)} test transactions")
+        if test_transactions:
+            await db[config.TRANSACTIONS_COLLECTION].insert_many(test_transactions)
+            logger.info(f"Inserted {len(test_transactions)} test transactions")
+        if test_decisions:
+            await db[config.DECISIONS_COLLECTION].insert_many(test_decisions)
+            logger.info(f"Inserted {len(test_decisions)} test decisions")
+        if test_reviews:
+            await db[config.HUMAN_REVIEWS_COLLECTION].insert_many(test_reviews)
+            logger.info(f"Inserted {len(test_reviews)} human reviews")
+        if test_notifications:
+            await db[config.NOTIFICATIONS_COLLECTION].insert_many(test_notifications)
+            logger.info(f"Inserted {len(test_notifications)} notifications")
+        if test_audit_events:
+            await db[config.AUDIT_EVENTS_COLLECTION].insert_many(test_audit_events)
+            logger.info(f"Inserted {len(test_audit_events)} audit events")
+    else:
+        logger.info("transactions collection already populated, skipping")
 
-    if test_decisions:
-        await db[config.DECISIONS_COLLECTION].insert_many(test_decisions)
-        logger.info(f"Inserted {len(test_decisions)} test decisions")
-
-    if test_reviews:
-        await db[config.HUMAN_REVIEWS_COLLECTION].insert_many(test_reviews)
-        logger.info(f"Inserted {len(test_reviews)} human reviews")
-
-    if test_notifications:
-        await db[config.NOTIFICATIONS_COLLECTION].insert_many(test_notifications)
-        logger.info(f"Inserted {len(test_notifications)} notifications")
-
-    if test_audit_events:
-        await db[config.AUDIT_EVENTS_COLLECTION].insert_many(test_audit_events)
-        logger.info(f"Inserted {len(test_audit_events)} audit events")
-
-    if test_metrics:
-        await db[config.SYSTEM_METRICS_COLLECTION].insert_many(test_metrics)
-        logger.info(f"Inserted {len(test_metrics)} system metrics")
+    if await _is_empty(config.SYSTEM_METRICS_COLLECTION):
+        test_metrics = await create_test_system_metrics()
+        if test_metrics:
+            await db[config.SYSTEM_METRICS_COLLECTION].insert_many(test_metrics)
+            logger.info(f"Inserted {len(test_metrics)} system metrics")
+    else:
+        logger.info("system_metrics collection already populated, skipping")
 
     logger.info("Comprehensive test data creation completed")
+
+    # Sanity-check: ensure vector search is reachable and returns results
+    # against the seeded data. A failure here means a fresh deployment will
+    # silently report "Found 0 similar transactions" in the workflow — see
+    # .specs/search-regression-fences/refactor.md (REQ-R-105). Runs
+    # unconditionally so re-runs against existing data are also validated.
+    await _seed_search_self_check(db)
+
+
+async def _seed_search_self_check(db) -> None:
+    """Run a known-good vector-search probe and warn if it returns 0 results.
+
+    Probes against an international wire profile that matches the
+    `TXN_INTERNATIONAL_*` seed scenarios, so a healthy seed should return at
+    least one match. We log a clear warning instead of raising so that a
+    transient embedding-API failure during setup does not block the rest of
+    the seeding from completing.
+    """
+    try:
+        from database.repositories import DecisionRepository
+
+        probe = {
+            "transaction_type": "international",
+            "amount": 175000,
+            "currency": "USD",
+            "sender": {"country": "GB", "name": "Global Supplies Ltd"},
+            "recipient": {"country": "SG", "name": "Singapore Imports Ltd"},
+        }
+        text = embedding_client.prepare_transaction_text(probe)
+        embedding_result = await embedding_client.get_embedding(text)
+        results = await DecisionRepository.vector_search_similar_transactions(
+            embedding=embedding_result.embedding,
+            transaction_type=probe["transaction_type"],
+            limit=5,
+        )
+
+        if not results:
+            logger.warning(
+                "Post-seed vector-search self-check returned 0 results. "
+                "The workflow's `find_similar_transactions` activity will "
+                "report `Found 0 similar transactions` for live traffic. "
+                "Likely causes: (1) seed status not in "
+                "DecisionRepository._DECIDED_STATUSES, (2) Atlas vector index "
+                "still building, (3) embedding model dimensions mismatch the "
+                "index. See .specs/search-regression-fences/refactor.md."
+            )
+        else:
+            logger.info(
+                "Post-seed vector-search self-check OK: %d candidate(s) "
+                "(top score=%.3f).",
+                len(results),
+                float(results[0].get("similarity_score", 0) or 0),
+            )
+    except Exception as exc:  # pragma: no cover - best-effort diagnostic only
+        logger.warning(
+            "Post-seed vector-search self-check failed to execute: %s. "
+            "This does not block setup, but verify search behaviour manually.",
+            exc,
+        )
 
 
 async def create_test_customers() -> List[Customer]:
@@ -536,7 +560,6 @@ async def create_comprehensive_test_transactions(customers: List[Customer]) -> L
             "created_at": base_time + timedelta(days=i, hours=random.randint(9, 17)),
             "reference_number": f"INV-2024-{i+1:03d}",
             "description": "Regular business payment",
-            "embedding": [random.random() for _ in range(config.VECTOR_DIMENSION)],
             "ml_features": {
                 "time_of_day": "business_hours",
                 "recurring": True,
@@ -568,7 +591,6 @@ async def create_comprehensive_test_transactions(customers: List[Customer]) -> L
             "created_at": base_time + timedelta(days=i*2, hours=random.randint(9, 17)),
             "reference_number": f"PO-2024-{i+1:03d}",
             "description": "Equipment purchase",
-            "embedding": [random.random() for _ in range(config.VECTOR_DIMENSION)],
             "ml_features": {
                 "time_of_day": "business_hours",
                 "high_value": True,
@@ -621,7 +643,6 @@ async def create_comprehensive_test_transactions(customers: List[Customer]) -> L
             "created_at": base_time + timedelta(days=i*3, hours=22 if "unusual_time" in scenario["flags"] else 14),
             "reference_number": f"URGENT-{i+1:03d}",
             "description": "Investment opportunity",
-            "embedding": [random.random() for _ in range(config.VECTOR_DIMENSION)],
             "ml_features": {
                 "time_of_day": "after_hours" if "unusual_time" in scenario["flags"] else "business_hours",
                 "first_time_recipient": True,
@@ -653,7 +674,6 @@ async def create_comprehensive_test_transactions(customers: List[Customer]) -> L
             "created_at": base_time + timedelta(days=i*5, hours=random.randint(9, 17)),
             "reference_number": f"EXPORT-2024-{i+1:03d}",
             "description": "Trade settlement",
-            "embedding": [random.random() for _ in range(config.VECTOR_DIMENSION)],
             "ml_features": {
                 "time_of_day": "business_hours",
                 "trade_finance": True,
@@ -687,7 +707,6 @@ async def create_comprehensive_test_transactions(customers: List[Customer]) -> L
             "created_at": velocity_base_time + timedelta(minutes=i*30),
             "reference_number": f"RAPID-{i+1:03d}",
             "description": "Rapid transaction",
-            "embedding": [random.random() for _ in range(config.VECTOR_DIMENSION)],
             "ml_features": {
                 "velocity_1h": 3 if i >= 2 else i+1,
                 "total_amount_1h": to_decimal128((i+1) * 25000),
@@ -725,7 +744,6 @@ async def create_comprehensive_test_transactions(customers: List[Customer]) -> L
             "created_at": base_time + timedelta(days=i, hours=random.randint(9, 17)),
             "reference_number": f"REV-2024-{i+1:03d}",
             "description": f"Transaction requiring {scenario['priority']} priority review",
-            "embedding": [random.random() for _ in range(config.VECTOR_DIMENSION)],
             "ml_features": {
                 "review_priority": scenario["priority"],
                 "review_reason": scenario["reason"]
@@ -733,6 +751,22 @@ async def create_comprehensive_test_transactions(customers: List[Customer]) -> L
             "risk_flags": [scenario["reason"]]
         }
         transactions.append(txn)
+
+    # Generate real embeddings for every seed transaction (REQ-E-103, 104, 105).
+    # On per-transaction failure we skip the embedding fields rather than write
+    # random data — the live workflow uses the same fallback strategy.
+    logger.info("Generating real embeddings for %d seed transactions ...", len(transactions))
+    successes = 0
+    for txn in transactions:
+        result = await _seed_embedding(txn)
+        if result is not None:
+            embedding, model = result
+            txn["embedding"] = embedding
+            txn["embedding_model"] = model
+            successes += 1
+    logger.info(
+        "Generated embeddings for %d/%d seed transactions", successes, len(transactions)
+    )
 
     return transactions
 

@@ -2,25 +2,31 @@
 
 ## Overview
 
-This document provides comprehensive configuration details for the AI-Powered Transaction Processing System. All configuration is managed through environment variables, with sensible defaults for PoV evaluation.
+This document is the reference for all environment variables the
+application reads. Configuration is loaded from a `.env` file via
+`python-dotenv` (see `utils/config.py`).
+
+The list of recognised variables matches `utils/config.py` and
+`.env.example` exactly. Any variable not listed here is not consumed
+by the application.
 
 ## Quick Configuration
 
-### Minimal Required Configuration
+### Minimal required configuration
 
-Create a `.env` file with these essential settings:
+Create a `.env` file with these settings:
 
 ```bash
-# MongoDB Atlas (Required)
+# MongoDB Atlas (required)
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/
 
-# AWS Bedrock (Required for AI features)
-AWS_ACCESS_KEY_ID=your_access_key_here
-AWS_SECRET_ACCESS_KEY=your_secret_key_here
+# AWS Bedrock (required for the primary LLM and embedding fallback)
 AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
 ```
 
-### Copy from Template
+### Copy from template
 
 ```bash
 cp .env.example .env
@@ -29,420 +35,270 @@ cp .env.example .env
 
 ## Complete Configuration Reference
 
-### MongoDB Configuration
+### MongoDB
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `MONGODB_URI` | MongoDB Atlas connection string | - | ✅ | `mongodb+srv://user:pass@cluster.mongodb.net/` |
-| `MONGODB_DB_NAME` | Database name | `transaction_ai_poc` | ❌ | `production_db` |
-| `MONGODB_MAX_POOL_SIZE` | Connection pool size | `50` | ❌ | `100` |
-| `MONGODB_MIN_POOL_SIZE` | Minimum pool size | `10` | ❌ | `20` |
-| `MONGODB_SERVER_SELECTION_TIMEOUT` | Connection timeout (ms) | `5000` | ❌ | `10000` |
-| `MONGODB_SOCKET_TIMEOUT` | Socket timeout (ms) | `30000` | ❌ | `60000` |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MONGODB_URI` | MongoDB Atlas connection string (required) | — |
+| `MONGODB_DB_NAME` | Database name | `transaction_ai_poc` |
 
-**MongoDB Atlas Setup:**
-1. Create free cluster at [mongodb.com/atlas](https://mongodb.com/atlas)
-2. Configure network access (whitelist IP or 0.0.0.0/0 for PoV)
-3. Create database user with read/write permissions
-4. Get connection string from "Connect" → "Connect your application"
+Pool, timeout, and retry behaviour are not configurable via env vars.
+They are pinned in `database/connection.py::MONGO_CLIENT_OPTIONS`
+following the `mongodb-connection` skill's "High-Traffic / Bursty"
+OLTP profile (maxPoolSize 50, minPoolSize 5, serverSelectionTimeoutMS
+5000, etc.). Edit that constant directly if you need to retune.
 
-### Temporal Configuration
+**MongoDB Atlas setup:**
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `TEMPORAL_HOST` | Temporal server address | `localhost:7233` | ❌ | `temporal:7233` |
-| `TEMPORAL_NAMESPACE` | Workflow namespace | `default` | ❌ | `production` |
-| `TEMPORAL_TASK_QUEUE` | Task queue name | `transaction-processing-queue` | ❌ | `high-priority-queue` |
-| `TEMPORAL_WORKFLOW_TIMEOUT` | Max workflow duration | `300` | ❌ | `600` |
-| `TEMPORAL_ACTIVITY_TIMEOUT` | Activity timeout (seconds) | `30` | ❌ | `60` |
-| `TEMPORAL_RETRY_MAX_ATTEMPTS` | Max retry attempts | `5` | ❌ | `10` |
-| `TEMPORAL_RETRY_BACKOFF` | Initial backoff (seconds) | `1` | ❌ | `2` |
+1. Create a free cluster at [mongodb.com/atlas](https://mongodb.com/atlas).
+2. Configure network access (whitelist IP, or `0.0.0.0/0` for PoV).
+3. Create a database user with read/write permissions.
+4. Get the connection string from "Connect" → "Connect your application".
 
-**Docker vs Local:**
+### Temporal
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TEMPORAL_HOST` | Temporal server address | `temporal:7233` |
+| `TEMPORAL_NAMESPACE` | Workflow namespace | `default` |
+| `TEMPORAL_TASK_QUEUE` | Task queue name | `transaction-processing-queue` |
+
+Activity timeouts, retry policies, and the auto-approval timeout (24h)
+are defined inline in `temporal/workflows.py` and the per-activity
+`workflow.execute_activity` calls. They are not configurable via env.
+
+**Docker vs local:**
+
 - Local development: `TEMPORAL_HOST=localhost:7233`
-- Docker deployment: `TEMPORAL_HOST=temporal:7233`
+- Docker deployment: `TEMPORAL_HOST=temporal:7233` (the default)
 
-### AWS Bedrock Configuration
+### AWS Bedrock
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `AWS_REGION` | AWS region | `us-east-1` | ✅ | `us-west-2` |
-| `AWS_ACCESS_KEY_ID` | AWS access key | - | ✅ | `AKIA...` |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key | - | ✅ | `secret...` |
-| `AWS_SESSION_TOKEN` | Session token (if using STS) | - | ❌ | `token...` |
-| `BEDROCK_MODEL_VERSION` | Claude model version | `us.anthropic.claude-opus-4-1-20250805-v1:0` | ❌ | `claude-3-sonnet` |
-| `BEDROCK_EMBEDDING_MODEL` | Embedding model | `cohere.embed-english-v3` | ❌ | `cohere.embed-multilingual-v3` |
-| `BEDROCK_MAX_TOKENS` | Max response tokens | `4096` | ❌ | `8192` |
-| `BEDROCK_TEMPERATURE` | Model temperature | `0.3` | ❌ | `0.7` |
-| `BEDROCK_TIMEOUT` | API timeout (seconds) | `30` | ❌ | `60` |
-| `USE_MOCK_AI` | Use mock AI for testing | `false` | ❌ | `true` |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AWS_REGION` | AWS region | `us-east-1` |
+| `AWS_ACCESS_KEY_ID` | AWS access key (required) | — |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key (required) | — |
+| `BEDROCK_MODEL_VERSION` | Claude model id used for transaction analysis | `us.anthropic.claude-opus-4-1-20250805-v1:0` |
 
-**AWS Bedrock Setup:**
-1. Enable Bedrock in AWS Console
-2. Request access to Claude and Cohere models
-3. Create IAM user with Bedrock permissions
-4. Generate access keys
+Other Bedrock parameters (max tokens, temperature, top_p) are pinned
+in `ai/bedrock_client.py` and not exposed as env vars.
 
-### Application Configuration
+**Bedrock setup:**
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `APP_ENV` | Environment name | `development` | ❌ | `production` |
-| `LOG_LEVEL` | Logging verbosity | `INFO` | ❌ | `DEBUG` |
-| `API_BASE_URL` | API server URL | `http://localhost:8000/api` | ❌ | `https://api.example.com` |
-| `API_PORT` | API server port | `8000` | ❌ | `3000` |
-| `DASHBOARD_PORT` | Dashboard port | `8501` | ❌ | `8080` |
-| `ENABLE_METRICS` | Enable metrics collection | `true` | ❌ | `false` |
-| `METRICS_INTERVAL` | Metrics collection interval (s) | `60` | ❌ | `30` |
+1. Enable Bedrock in the AWS console.
+2. Request access to the Claude and Cohere `embed-english-v3` models
+   (approval is typically near-instant).
+3. Create an IAM user with `bedrock:InvokeModel` and
+   `bedrock:InvokeModelWithResponseStream`, and generate access keys.
 
-### Business Logic Configuration
+### LLM Provider Selection
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `CONFIDENCE_THRESHOLD_APPROVE` | Min confidence for auto-approval (%) | `85` | ❌ | `90` |
-| `CONFIDENCE_THRESHOLD_ESCALATE` | Min confidence to avoid rejection (%) | `70` | ❌ | `75` |
-| `AUTO_APPROVAL_LIMIT` | Max amount for auto-approval ($) | `50000` | ❌ | `100000` |
-| `MANAGER_APPROVAL_THRESHOLD` | Amount requiring manager ($) | `50000` | ❌ | `75000` |
-| `HIGH_RISK_AMOUNT` | High risk transaction amount ($) | `10000` | ❌ | `25000` |
-| `VELOCITY_CHECK_WINDOW` | Velocity check window (seconds) | `3600` | ❌ | `1800` |
-| `VELOCITY_CHECK_LIMIT` | Max transactions in window | `5` | ❌ | `3` |
-| `SIMILAR_TRANSACTION_LIMIT` | Number of similar transactions to fetch | `10` | ❌ | `20` |
-| `VECTOR_SIMILARITY_THRESHOLD` | Min similarity score | `0.85` | ❌ | `0.90` |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LLM_PROVIDER` | LLM backend: `bedrock` or `groq` | `bedrock` |
 
-### Risk Assessment Configuration
+`bedrock` is the primary supported LLM (Claude via Bedrock); `groq`
+is offered as an alternative for environments without Bedrock access.
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `HIGH_RISK_COUNTRIES` | Comma-separated list | `IR,KP,SY,CU` | ❌ | `IR,KP,SY,CU,VE` |
-| `SUSPICIOUS_PATTERNS` | Regex patterns (JSON) | See below | ❌ | Custom patterns |
-| `FRAUD_KEYWORDS` | Comma-separated keywords | `casino,gambling,crypto` | ❌ | `casino,lottery,bitcoin` |
-| `ENABLE_SANCTIONS_CHECK` | Enable sanctions screening | `true` | ❌ | `false` |
-| `ENABLE_PEP_CHECK` | Enable PEP screening | `true` | ❌ | `false` |
-| `RISK_SCORE_WEIGHTS` | JSON weight configuration | See below | ❌ | Custom weights |
+### Groq (alternative LLM)
 
-**Default Suspicious Patterns:**
-```json
-{
-  "patterns": [
-    ".*casino.*",
-    ".*gambling.*",
-    ".*lottery.*",
-    ".*cryptocurrency.*"
-  ]
-}
-```
+Required when `LLM_PROVIDER=groq`.
 
-**Default Risk Score Weights:**
-```json
-{
-  "amount": 0.3,
-  "geography": 0.25,
-  "velocity": 0.2,
-  "history": 0.15,
-  "pattern": 0.1
-}
-```
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GROQ_API_KEY` | Groq API key | — |
+| `GROQ_MODEL_ID` | Groq model id | `openai/gpt-oss-120b` |
 
-### Notification Configuration
+### Embeddings
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `ENABLE_NOTIFICATIONS` | Enable email notifications | `false` | ❌ | `true` |
-| `SMTP_HOST` | SMTP server host | - | ❌* | `smtp.gmail.com` |
-| `SMTP_PORT` | SMTP server port | `587` | ❌ | `465` |
-| `SMTP_USERNAME` | SMTP username | - | ❌* | `user@example.com` |
-| `SMTP_PASSWORD` | SMTP password | - | ❌* | `password` |
-| `SMTP_FROM_EMAIL` | From email address | - | ❌* | `noreply@example.com` |
-| `NOTIFICATION_RECIPIENTS` | Comma-separated emails | - | ❌ | `admin@example.com,manager@example.com` |
-| `SLACK_WEBHOOK_URL` | Slack webhook for alerts | - | ❌ | `https://hooks.slack.com/...` |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VOYAGE_API_KEY` | Voyage AI API key (primary embeddings) | — |
+| `VOYAGE_MODEL` | Voyage embedding model | `voyage-4` |
+| `VOYAGE_OUTPUT_DIMENSION` | Embedding dimension | `1024` |
 
-*Required if `ENABLE_NOTIFICATIONS=true` (Note: This feature is mentioned as an example and is not part of the PoV.)
+The Cohere fallback model id is hardcoded in `utils/config.py` as
+`cohere.embed-english-v3` and uses the same Bedrock credentials as the
+LLM. `VOYAGE_OUTPUT_DIMENSION` must remain `1024` to match the Atlas
+vector-search index dimension.
 
-### Performance Tuning
+If `VOYAGE_API_KEY` is unset or the Voyage call fails, the
+`EmbeddingClient` automatically falls back to Cohere via Bedrock.
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `WORKER_CONCURRENCY` | Concurrent workflow executions | `10` | ❌ | `20` |
-| `ACTIVITY_CONCURRENCY` | Concurrent activities | `20` | ❌ | `50` |
-| `BATCH_SIZE` | Batch processing size | `100` | ❌ | `500` |
-| `CACHE_TTL` | Cache TTL (seconds) | `300` | ❌ | `600` |
-| `ENABLE_CACHE` | Enable caching | `false` | ❌ | `true` |
-| `CONNECTION_POOL_SIZE` | HTTP connection pool | `10` | ❌ | `25` |
-| `REQUEST_TIMEOUT` | HTTP request timeout (s) | `30` | ❌ | `60` |
+### Application
 
-### Security Configuration
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `APP_ENV` | Environment label (`development`, `production`, etc.) | `development` |
+| `LOG_LEVEL` | Python logging level | `INFO` |
+| `API_BASE_URL` | URL the Streamlit dashboard uses to reach the API | `http://localhost:8000/api` |
 
-| Variable | Description | Default | Required | Example |
-|----------|-------------|---------|----------|---------|
-| `ENABLE_AUTH` | Enable authentication | `false` | ❌ | `true` |
-| `JWT_SECRET` | JWT signing secret | - | ❌* | `your-secret-key` |
-| `JWT_EXPIRY` | Token expiry (seconds) | `3600` | ❌ | `7200` |
-| `API_KEY` | API key for external access | - | ❌ | `sk-...` |
-| `ENABLE_RATE_LIMITING` | Enable rate limiting | `false` | ❌ | `true` |
-| `RATE_LIMIT_REQUESTS` | Requests per window | `100` | ❌ | `1000` |
-| `RATE_LIMIT_WINDOW` | Window size (seconds) | `60` | ❌ | `300` |
-| `ALLOWED_ORIGINS` | CORS origins | `*` | ❌ | `https://example.com` |
+The dashboard reads `API_BASE_URL` to call the FastAPI server. Use
+`http://api:8000/api` when running under Docker Compose so the
+container can reach the API service by its service name.
 
-*Required if `ENABLE_AUTH=true`
+### Decision Thresholds
 
-## Environment-Specific Configurations
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CONFIDENCE_THRESHOLD_APPROVE` | Min AI confidence (%) to auto-approve | `85` |
+| `CONFIDENCE_THRESHOLD_ESCALATE` | Min confidence floor below which decisions escalate | `70` |
+| `AUTO_APPROVAL_LIMIT` | Amount (USD) above which approved transactions require manager approval | `50000` |
 
-### Development Environment
+### Hardcoded Settings (not env-driven)
+
+These are defined in `utils/config.py` as class attributes. Edit the
+file (and rebuild Docker images) to change them:
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `HIGH_RISK_COUNTRIES` | `["RU", "IR", "KP", "SY", "AF", "YE"]` | Sanctions / OFAC screening |
+| `VECTOR_SEARCH_INDEX` | `transaction_vector_index` | Atlas vector-search index name |
+| `VECTOR_DIMENSION` | `1024` | Embedding length |
+| `MAX_SIMILAR_CASES` | `10` | Top-k for hybrid search |
+| `SIMILARITY_THRESHOLD` | `0.75` | Min combined score for a similar case |
+
+Collection names (`transactions`, `transaction_decisions`,
+`customers`, `accounts`, `human_reviews`, `audit_events`,
+`notifications`, `system_metrics`, `rules`, `transaction_journal`,
+`balance_updates`, `balance_holds`) are also pinned in
+`utils/config.py`.
+
+## Environment-Specific Examples
+
+### Development
 
 ```bash
-# .env.development
 APP_ENV=development
 LOG_LEVEL=DEBUG
 TEMPORAL_HOST=localhost:7233
 API_BASE_URL=http://localhost:8000/api
-USE_MOCK_AI=false
-ENABLE_AUTH=false
-ENABLE_NOTIFICATIONS=false
+LLM_PROVIDER=bedrock
 ```
 
-### Docker Environment
+### Docker (project root `.env`)
 
 ```bash
-# .env.docker
 APP_ENV=docker
 TEMPORAL_HOST=temporal:7233
 API_BASE_URL=http://api:8000/api
-MONGODB_URI=mongodb://mongo:27017/
 ```
 
-### Production Environment
+### Production
 
 ```bash
-# .env.production
 APP_ENV=production
 LOG_LEVEL=WARNING
-ENABLE_AUTH=true
-ENABLE_RATE_LIMITING=true
-ENABLE_NOTIFICATIONS=true
-WORKER_CONCURRENCY=50
-USE_MOCK_AI=false
+TEMPORAL_HOST=temporal.production.internal:7233
+TEMPORAL_NAMESPACE=production
+LLM_PROVIDER=bedrock
+
+CONFIDENCE_THRESHOLD_APPROVE=90
+AUTO_APPROVAL_LIMIT=100000
 ```
 
-## Configuration Validation
+## Validation
 
-### Validation Script
-
-Run the configuration validator:
+There is no dedicated validation script. To check that configuration
+is healthy, hit the API health endpoint after startup:
 
 ```bash
-python -m utils.validate_config
-
-# Expected output:
-# ✅ MongoDB connection: Valid
-# ✅ AWS credentials: Valid
-# ✅ Temporal connection: Valid
-# ✅ Required variables: All present
-# ⚠️  Optional features: Notifications disabled
+curl http://localhost:8000/health
 ```
 
-### Health Check Endpoints
+Sample response:
 
-Verify configuration via health endpoints:
-
-```bash
-# API health with config status
-curl http://localhost:8000/health/detailed
-
-# Response:
+```json
 {
   "status": "healthy",
-  "config": {
-    "mongodb": "connected",
-    "temporal": "connected",
-    "bedrock": "configured",
-    "notifications": "disabled"
+  "timestamp": "2026-05-11T10:47:45.522207+00:00",
+  "mongodb": "connected",
+  "temporal": "connected",
+  "embedding": {
+    "primary_model": "voyage-4",
+    "voyage_available": true,
+    "cohere_available": true,
+    "available_models": ["voyage-4", "cohere.embed-english-v3"]
   }
 }
 ```
 
+`mongodb=disconnected` means `connect_to_mongo()` was never called
+or the client was closed; `temporal=disconnected` means the FastAPI
+startup event failed to reach `TEMPORAL_HOST`.
+
 ## Configuration Best Practices
 
-### 1. Security
+### Security
 
-- Never commit `.env` files to version control
-- Use AWS IAM roles in production instead of keys
-- Rotate secrets regularly
-- Use environment-specific configurations
+- Never commit `.env` files to version control. `.env` is in
+  `.gitignore`; `.env.example` is the only template that should ship.
+- Use AWS IAM roles in production rather than long-lived access keys.
+- Rotate the `GROQ_API_KEY` and `VOYAGE_API_KEY` regularly.
 
-### 2. Performance
+### Performance
 
-- Adjust pool sizes based on load testing
-- Enable caching for read-heavy workloads
-- Tune worker concurrency for your hardware
-- Monitor and adjust timeout values
+- Pool sizes and timeouts live in `database/connection.py`. Adjust
+  there based on load testing — they are not env-driven.
+- Voyage is faster and finance-tuned; keep `VOYAGE_API_KEY` set so the
+  Cohere fallback is only invoked on transient failures.
 
-### 3. Reliability
+### Reliability
 
-- Set appropriate retry policies
-- Configure reasonable timeouts
-- Use connection pooling
-- Enable circuit breakers for external services
+- Workflow retry policies (`maximum_attempts=5`, exponential backoff)
+  are defined in `temporal/workflows.py`. Tune there if needed.
+- The `EmbeddingClient` falls back automatically; no extra
+  configuration is required.
 
-### 4. Monitoring
+## Docker Compose
 
-- Enable detailed logging in development
-- Use WARNING level in production
-- Configure metrics collection
-- Set up alerting thresholds
-
-## Docker Compose Configuration
-
-### Override Configuration
-
-Create `docker-compose.override.yml`:
+Both compose files load environment from the project's `.env`:
 
 ```yaml
-version: '3.8'
+# docker-compose.yml (project root)
+services:
+  api:
+    env_file: [.env]
+  temporal-worker:
+    env_file: [.env]
+  streamlit:
+    env_file: [.env]
+```
 
+To override a single variable for a single service without editing
+`.env`, create a `docker-compose.override.yml`:
+
+```yaml
 services:
   api:
     environment:
       - LOG_LEVEL=DEBUG
-      - WORKER_CONCURRENCY=5
-
-  worker:
-    environment:
-      - ACTIVITY_CONCURRENCY=10
-      - TEMPORAL_HOST=temporal:7233
-
-  dashboard:
-    environment:
-      - API_BASE_URL=http://api:8000/api
 ```
 
-### Environment File Loading
+## Kubernetes
 
-```yaml
-# docker-compose.yml
-services:
-  api:
-    env_file:
-      - .env
-      - .env.docker  # Docker-specific overrides
-```
+The repo does not ship Kubernetes manifests. If you produce them
+yourself, the canonical mapping is:
 
-## Kubernetes Configuration
+- ConfigMap: `APP_ENV`, `LOG_LEVEL`, `TEMPORAL_HOST`,
+  `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`, `API_BASE_URL`,
+  `LLM_PROVIDER`, `BEDROCK_MODEL_VERSION`, `GROQ_MODEL_ID`,
+  `VOYAGE_MODEL`, `VOYAGE_OUTPUT_DIMENSION`, `MONGODB_DB_NAME`,
+  `CONFIDENCE_THRESHOLD_APPROVE`, `CONFIDENCE_THRESHOLD_ESCALATE`,
+  `AUTO_APPROVAL_LIMIT`.
+- Secret: `MONGODB_URI`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `GROQ_API_KEY`, `VOYAGE_API_KEY`.
 
-### ConfigMap Example
+## Troubleshooting
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: app-config
-data:
-  APP_ENV: "production"
-  LOG_LEVEL: "INFO"
-  TEMPORAL_HOST: "temporal-service:7233"
-  API_BASE_URL: "http://api-service:8000/api"
-```
+| Issue | Likely cause | Fix |
+|-------|--------------|-----|
+| MongoDB connection timeout | IP not whitelisted, malformed URI | Whitelist your IP in Atlas; verify URI format |
+| Bedrock `AccessDeniedException` | Model access not granted | Request access to Claude + Cohere in the Bedrock console |
+| `mongodb=disconnected` in health | Async client never initialised | Restart the API; check API logs for `connect_to_mongo` errors |
+| `temporal=disconnected` in health | Wrong `TEMPORAL_HOST`, server not running | Check `docker ps` for the temporal container |
+| Voyage embeddings missing | `VOYAGE_API_KEY` not set | Add the key, or accept the Cohere fallback |
+| Streamlit can't reach API | Wrong `API_BASE_URL` | Use `http://api:8000/api` under Docker, `http://localhost:8000/api` locally |
 
-### Secret Example
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: app-secrets
-type: Opaque
-stringData:
-  MONGODB_URI: "mongodb+srv://user:pass@cluster.mongodb.net/"
-  AWS_ACCESS_KEY_ID: "AKIA..."
-  AWS_SECRET_ACCESS_KEY: "secret..."
-  JWT_SECRET: "your-jwt-secret"
-```
-
-## Troubleshooting Configuration Issues
-
-### Common Problems
-
-| Issue | Solution |
-|-------|----------|
-| MongoDB connection timeout | Check IP whitelist, verify URI format |
-| Bedrock access denied | Verify AWS credentials and model access |
-| Temporal connection failed | Ensure Temporal is running, check host/port |
-| Environment variables not loading | Check .env file location and format |
-| Docker can't find services | Use service names (temporal, api) not localhost |
-
-### Debug Configuration
-
-Enable debug mode to see loaded configuration:
-
-```bash
-LOG_LEVEL=DEBUG python -m api.main
-
-# Logs will show:
-# INFO: Loading configuration from .env
-# DEBUG: MONGODB_URI=mongodb+srv://***
-# DEBUG: TEMPORAL_HOST=localhost:7233
-# DEBUG: CONFIDENCE_THRESHOLD_APPROVE=85
-```
-
-## Migration from Development to Production
-
-### Checklist
-
-- [ ] Replace mock credentials with production values
-- [ ] Enable authentication and rate limiting
-- [ ] Configure production MongoDB cluster
-- [ ] Set up notification endpoints
-- [ ] Adjust concurrency settings for load
-- [ ] Enable metrics and monitoring
-- [ ] Configure backup and recovery
-- [ ] Set up secret management system
-- [ ] Review and adjust all thresholds
-- [ ] Test failover scenarios
-
-### Production-Ready Configuration Template
-
-```bash
-# Production Configuration Template
-APP_ENV=production
-LOG_LEVEL=WARNING
-
-# Secure MongoDB with SSL
-MONGODB_URI=mongodb+srv://prod-user:${MONGODB_PASSWORD}@prod-cluster.mongodb.net/?ssl=true&authSource=admin
-
-# Use IAM roles instead of keys
-AWS_REGION=us-east-1
-# AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from IAM role
-
-# Production Temporal cluster
-TEMPORAL_HOST=temporal.production.internal:7233
-TEMPORAL_NAMESPACE=production
-TEMPORAL_TASK_QUEUE=prod-transaction-queue
-
-# Performance tuning
-WORKER_CONCURRENCY=50
-ACTIVITY_CONCURRENCY=100
-CONNECTION_POOL_SIZE=25
-
-# Security
-ENABLE_AUTH=true
-JWT_SECRET=${JWT_SECRET}  # From secret manager
-ENABLE_RATE_LIMITING=true
-ALLOWED_ORIGINS=https://app.example.com
-
-# Monitoring
-ENABLE_METRICS=true
-METRICS_INTERVAL=30
-
-# Business logic
-CONFIDENCE_THRESHOLD_APPROVE=90
-AUTO_APPROVAL_LIMIT=100000
-
-# Notifications
-ENABLE_NOTIFICATIONS=true
-SMTP_HOST=smtp.sendgrid.net
-SMTP_USERNAME=apikey
-SMTP_PASSWORD=${SENDGRID_API_KEY}
-```
-
----
-
-For additional configuration support, consult the technical documentation or contact the development team.
+For deeper troubleshooting see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).

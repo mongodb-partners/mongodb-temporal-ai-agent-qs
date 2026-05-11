@@ -31,17 +31,17 @@ graph TB
     end
 
     subgraph "AI Services"
-        AI_PROVIDER{LLM Provider}
+        AI_PROVIDER{LLM Provider<br/>LLM_PROVIDER env var}
         GROQ[Groq]
         EMBEDDINGS_PROVIDER{Embeddings Provider}
         BEDROCK[AWS Bedrock]
-        
+
         VOYAGE[Voyage AI]
-        VOYAGE_EMBED[Voyage<br/>Embeddings]
-        CLAUDE[Claude Opus<br/>Decision Analysis]
-        COHERE[Cohere<br/>Embeddings]
-        LLM_OpenAI[OpenAI<br/>Via Groq]
-        
+        VOYAGE_EMBED[Voyage<br/>Embeddings 1024d]
+        CLAUDE[Claude<br/>Decision Analysis]
+        COHERE[Cohere<br/>Embeddings 1024d]
+        LLM_OpenAI[OpenAI gpt-oss-120b<br/>via Groq]
+
     end
 
     UI --> FASTAPI
@@ -52,8 +52,8 @@ graph TB
     WORKFLOWS --> MONGODB
     WORKFLOWS --> AI_PROVIDER
     WORKFLOWS --> EMBEDDINGS_PROVIDER
-    AI_PROVIDER -->|Primary| GROQ
-    AI_PROVIDER -->|Fallback| BEDROCK
+    AI_PROVIDER -->|Primary| BEDROCK
+    AI_PROVIDER -->|Alternative| GROQ
     EMBEDDINGS_PROVIDER -->|Primary| VOYAGE
     EMBEDDINGS_PROVIDER -->|Fallback| BEDROCK
     BEDROCK --> CLAUDE
@@ -78,28 +78,42 @@ graph TB
 
 **Key Endpoints:**
 ```
-POST /api/transactions          - Submit new transaction
-GET  /api/transactions/{id}     - Get transaction status
-GET  /api/workflows             - List workflow executions
-POST /api/reviews/{id}/decision - Submit human review decision
-GET  /health                    - Service health check
+POST /api/transaction              - Submit new transaction (returns transaction_id + workflow_id)
+GET  /api/transaction/{id}         - Get AI decision for a transaction (200 with decision, 202 if pending, 404 if unknown)
+GET  /api/metrics                  - Aggregate transaction & decision metrics
+GET  /health                       - Service + dependency health (mongo, temporal, embedding providers)
 ```
+
+The Streamlit dashboard and external clients consume the FastAPI surface
+above. Human-review actions are persisted directly to MongoDB by the
+workflow's `queue_for_human_review` activity and surfaced through the
+dashboard rather than via a dedicated REST route.
 
 ### 2. Workflow Orchestration (Temporal)
 
 **Location:** `temporal/workflows.py`, `temporal/activities.py`
 
-**Workflow Definition:**
-```python
-class TransactionProcessingWorkflow:
-    Activities:
-    1. enrich_transaction_data()
-    2. perform_transaction_risk_assessment()
-    3. find_similar_transactions()
-    4. analyze_transaction_with_ai()
-    5. store_decision() OR queue_for_human_review()
-    6. send_notification()
-```
+**Workflow Definition (`TransactionProcessingWorkflow`):**
+
+The workflow runs activities in this sequence:
+
+1. `validate_and_hold_funds` — verify accounts exist, place a hold for the amount
+2. `enrich_transaction_data` — apply rule engine, attach customer history, compute velocity metrics, surface risk flags
+3. `perform_risk_assessment` — call the LLM for a risk score, run compliance checks
+4. `find_similar_transactions` — embed the transaction (Voyage primary, Cohere fallback) and run hybrid search
+5. `analyze_fraud_network` — graph traversal across sender/recipient accounts (`$graphLookup`)
+6. `ai_decision_analysis` — combine inputs and call the LLM for the approve/reject/escalate decision
+7. `store_decision` — persist the `TransactionDecision`, audit event, and update transaction status
+8. `queue_for_human_review` (only if low confidence) — enqueue for the Streamlit human-review UI
+9. `execute_fund_transfer` (only if approved) — ACID two-account debit/credit via MongoDB session
+10. `cleanup_hold` — release the hold for non-approved decisions or on workflow failure
+11. `send_notification` — record a notification document for the dashboard
+
+Signals: `approve(manager_name)` releases a workflow waiting on the
+$50k auto-approval gate; `override_decision(decision, user, reason)`
+overrides the AI's verdict before completion. Query: `get_status()`
+returns the in-progress workflow state plus the final `ProcessingResult`
+once available.
 
 **Temporal Features Used:**
 - **Durable Execution:** Survives process crashes
@@ -110,75 +124,133 @@ class TransactionProcessingWorkflow:
 
 ### 3. Data Layer (MongoDB Atlas)
 
-**Database Schema:**
+**Database Schema** (canonical definitions in `database/schemas.py` and
+`database/account_schemas.py`):
 
 ```javascript
-// transactions collection
+// transactions
 {
   _id: ObjectId,
+  transaction_id: String,           // "TXN_YYYYMMDD_<uuid8>"
+  transaction_type: String,         // "wire_transfer" | "ach" | "international"
+  amount: Decimal128,               // Stored as Decimal128 for monetary precision
+  currency: String,                 // ISO 4217
+  sender: {
+    name: String,
+    country: String,
+    account_number: String,
+    customer_id: String
+  },
+  recipient: {
+    name: String,
+    country: String,
+    account_number: String
+  },
+  reference_number: String,
+  status: String,                   // "pending" | "processing" | "approved" | "rejected" | "escalated" | "pending_review" | "pending_manager_approval" | "completed" | "failed"
+  embedding: Array[1024],           // Voyage or Cohere embedding for vector search
+  embedding_model: String,          // e.g. "voyage-4" or "cohere.embed-english-v3"
+  ml_features: Object,
+  risk_flags: Array<String>,
+  rules_applied: Array<String>,
+  processing_stages: Array<Object>,
+  created_at: Date,
+  updated_at: Date
+}
+
+// transaction_decisions
+{
+  _id: ObjectId,
+  decision_id: String,              // "DEC_YYYYMMDD_<uuid8>"
   transaction_id: String,
-  amount: Number,
-  currency: String,
-  type: String,
-  source_account: String,
-  destination_account: String,
-  timestamp: Date,
-  embedding: Array[1024], // Vector for similarity search
+  decision: String,                 // "approve" | "reject" | "escalate" | "hold"
+  confidence_score: Decimal128,     // 0-100
+  risk_score: Decimal128,           // 0-100
+  model_version: String,            // e.g. "openai/gpt-oss-120b" or BEDROCK_MODEL_VERSION
+  processing_time_ms: Int,
+  reasoning: {
+    primary_reasoning: String,
+    risk_factors: Array<String>,
+    compliance_notes: String
+  },
+  similar_cases: Array<Object>,     // Top similar precedents from hybrid search
+  rules_triggered: Array<String>,
   workflow_id: String,
-  status: String,
-  risk_score: Number
+  temporal_run_id: String,
+  created_at: Date
 }
 
-// transaction_decisions collection
+// rules
 {
   _id: ObjectId,
-  transaction_id: String,
-  decision: String,
-  confidence: Number,
-  reasoning: String,
-  risk_factors: Array,
-  similar_transactions: Array,
-  decided_at: Date,
-  decided_by: String
-}
-
-// rules collection
-{
-  _id: ObjectId,
+  rule_id: String,                  // "RULE_<uuid8>"
   name: String,
-  condition: Object,
-  action: String,
-  priority: Number,
-  enabled: Boolean,
-  effectiveness: {
-    true_positives: Number,
-    false_positives: Number
-  }
+  description: String,
+  category: String,                 // "amount" | "geography" | "pattern" | "velocity" | "compliance"
+  status: String,                   // "active" | "inactive" | "testing"
+  conditions: {                     // MongoDB-style condition tree
+    operator: "AND" | "OR",
+    conditions: Array<{ field, operator, value }>
+  },
+  action: String,                   // "approve" | "reject" | "escalate"
+  priority: Int,                    // 0-100
+  parameters: Object,
+  metrics: {
+    triggered_count: Int,
+    true_positives: Int,
+    false_positives: Int
+  },
+  created_at: Date,
+  updated_at: Date
 }
 ```
 
-**Indexes:**
-- `transaction_id` (unique)
-- `timestamp` (descending)
-- `source_account + timestamp` (compound)
-- `embedding` (vector search index)
-- `workflow_id` (for Temporal integration)
+Other collections: `customers`, `human_reviews`, `notifications`,
+`audit_events`, `system_metrics` (TTL 30 days), `accounts`,
+`transaction_journal`, `balance_updates`, `balance_holds`. See
+`database/connection.py` `create_indexes()` for the full index set.
+
+**Key indexes (excerpt):**
+- `transaction_id` (unique) on `transactions`, `transaction_journal`, etc.
+- `(sender.customer_id, created_at)` — velocity queries
+- `(sender.account_number, created_at)` and `(recipient.account_number, created_at)` — graph-traversal joins
+- `(transaction_type, amount, sender.country, recipient.country)` — hybrid-search compound
+- Vector search index `transaction_vector_index` on `transactions.embedding` (1024 dims, cosine)
 
 ### 4. AI Integration Layer
 
-**AWS Bedrock Configuration:**
+**LLM provider** (`ai/bedrock_client.py`, `ai/groq_client.py`):
+
+The `LLM_PROVIDER` env var selects the backend. AWS Bedrock with Claude is the
+primary supported LLM; Groq with `openai/gpt-oss-120b` is offered as an
+alternative for environments without Bedrock access. Both implement the same
+async `analyze_transaction(prompt)` contract returning `{decision,
+confidence, reasoning, risk_factors, compliance_notes}`.
 
 ```python
-# ai/bedrock_client.py
-Models:
-- Claude Opus: Transaction analysis and decision making
-- Cohere: Embedding generation (1024 dimensions)
+# Selection logic (temporal/activities.py)
+if config.LLM_PROVIDER == "groq":
+    result = await groq_client.analyze_transaction(prompt)
+else:
+    result = await bedrock_client.analyze_transaction(prompt)
+```
 
-Features:
-- Structured prompts with transaction context
-- Confidence scoring (0-100)
-- Detailed reasoning output
-- Mock fallback for demo mode
+**Embedding provider** (`ai/embedding_client.py`):
+
+The `EmbeddingClient` tries Voyage AI (`voyage-4`, 1024 dims) first when
+`VOYAGE_API_KEY` is set, falling back to Cohere via Bedrock
+(`cohere.embed-english-v3`, 1024 dims) on failure or when Voyage is
+unconfigured. Output dimension is pinned to 1024 to match the Atlas
+vector-search index.
+
+```python
+# Health-check shape exposed at GET /health
+{
+  "voyage_available": true,
+  "cohere_available": true,
+  "primary_model": "voyage-4",
+  "available_models": ["voyage-4", "cohere.embed-english-v3"]
+}
 ```
 
 ## Data Flow Architecture
@@ -192,46 +264,67 @@ sequenceDiagram
     participant Temporal
     participant Worker
     participant MongoDB
-    participant Bedrock
+    participant LLM as LLM Provider
+    participant Embed as Embedding Provider
 
-    Client->>API: Submit Transaction
-    API->>Temporal: Start Workflow
-    Temporal->>Worker: Execute Activities
+    Client->>API: POST /api/transaction
+    API->>MongoDB: Insert transaction (status=pending)
+    API->>Temporal: Start TransactionProcessingWorkflow
+    API-->>Client: 200 (transaction_id, workflow_id)
 
-    Worker->>MongoDB: Enrich Data
-    MongoDB-->>Worker: Customer History
+    Temporal->>Worker: Execute activities
+    Worker->>MongoDB: validate_and_hold_funds
+    Worker->>MongoDB: enrich_transaction_data (rules + velocity)
+    Worker->>LLM: perform_risk_assessment
+    LLM-->>Worker: risk_score
+    Worker->>Embed: get_embedding (Voyage primary)
+    Embed-->>Worker: embedding vector
+    Worker->>MongoDB: hybrid_search_similar_transactions
+    MongoDB-->>Worker: similar precedents
+    Worker->>MongoDB: graph_network_analysis
+    Worker->>LLM: ai_decision_analysis
+    LLM-->>Worker: decision + confidence + reasoning
+    Worker->>MongoDB: store_decision
 
-    Worker->>MongoDB: Find Similar
-    MongoDB-->>Worker: Vector Results
-
-    Worker->>Bedrock: Analyze with AI
-    Bedrock-->>Worker: Decision + Confidence
-
-    alt Confidence > 85%
-        Worker->>MongoDB: Store Decision
-        Worker->>Client: Approved/Rejected
-    else Confidence <= 85%
-        Worker->>MongoDB: Queue for Review
-        Worker->>Client: Pending Review
+    alt confidence ≥ CONFIDENCE_THRESHOLD_APPROVE && decision=="approve"
+        Worker->>MongoDB: execute_fund_transfer (ACID, with sessions)
+    else confidence < threshold
+        Worker->>MongoDB: queue_for_human_review
     end
+    Worker->>MongoDB: send_notification
+
+    Client->>API: GET /api/transaction/{id}
+    API->>MongoDB: Read decision
+    API-->>Client: decision payload (200) or 202 if pending
 ```
 
 ### Vector Search Pipeline
 
 ```mermaid
 graph LR
-    A[Transaction] --> B[Generate Embedding]
-    B --> C[Cohere API]
-    C --> D[1024-dim Vector]
-    D --> E[Store in MongoDB]
-    E --> F[Vector Index]
+    A[Transaction] --> B[prepare_transaction_text]
+    B --> C{EmbeddingClient}
+    C -->|primary| C1[Voyage voyage-4]
+    C -->|fallback| C2[Bedrock cohere.embed-english-v3]
+    C1 --> D[1024-dim Vector]
+    C2 --> D
+    D --> E[Store on transactions.embedding]
+    E --> F[transaction_vector_index]
 
     G[Query Transaction] --> H[Generate Query Vector]
-    H --> I[Similarity Search]
+    H --> I[Hybrid Search Pipeline]
     F --> I
     I --> J[Top-K Results]
-    J --> K[Cosine Similarity > 0.85]
+    J --> K[combined_score > SIMILARITY_THRESHOLD 0.75]
 ```
+
+The hybrid pipeline (`DecisionRepository.hybrid_search_similar_transactions`)
+combines `$vectorSearch` with traditional index matches via `$unionWith`,
+applies feature-based scoring (amount proximity, geography, type),
+renormalises by active weight, and joins the resulting transactions with
+their `transaction_decisions`. Filters always include
+`status ∈ _DECIDED_STATUSES` so in-flight transactions are excluded as
+similar-case precedents.
 
 ## Integration Patterns
 
@@ -261,51 +354,68 @@ retry_policy = RetryPolicy(
 
 ### 2. MongoDB Aggregation Pipelines
 
-**Fraud Network Detection:**
+**Fraud Network Detection** (canonical implementation in
+`DecisionRepository.graph_network_analysis`):
+
 ```javascript
 db.transactions.aggregate([
-  { $match: { account_id: targetAccount } },
+  { $match: {
+      $and: [
+        { $or: [
+            { "sender.account_number": targetAccount },
+            { "recipient.account_number": targetAccount }
+        ]},
+        { created_at: { $gte: cutoffDate } }
+      ]
+  }},
   { $graphLookup: {
       from: "transactions",
-      startWith: "$destination_account",
-      connectFromField: "destination_account",
-      connectToField: "source_account",
-      as: "network",
-      maxDepth: 3
+      startWith: "$recipient.account_number",
+      connectFromField: "recipient.account_number",
+      connectToField: "sender.account_number",
+      as: "transaction_chain",
+      maxDepth: 3,
+      depthField: "chain_depth",
+      restrictSearchWithMatch: { created_at: { $gte: cutoffDate } }
   }},
-  { $unwind: "$network" },
-  { $group: {
-      _id: "$network.destination_account",
-      total_amount: { $sum: "$network.amount" },
-      transaction_count: { $count: {} }
-  }}
+  // ... project to extract suspicious_patterns (rapid_cycling, potential_layering)
+  // ... group to compute network statistics
 ])
 ```
 
 ### 3. AI Prompt Engineering
 
-**Structured Analysis Template:**
-```python
-prompt = f"""
-Analyze this financial transaction for fraud risk:
+Prompt templates live in `ai/prompts.py`. The
+`create_transaction_analysis_prompt` helper composes:
 
-Transaction Details:
-- Amount: ${amount}
-- Type: {transaction_type}
-- Source: {source_account}
-- Destination: {destination_account}
+- Transaction details (id, type, amount as USD with Decimal128 → float
+  via `from_decimal128`, sender/recipient name + country, reference)
+- Type-specific risk context (wire / ACH / international)
+- Similar historical cases (top 5, with their amount + decision +
+  risk_score)
+- 90-day customer history (count, avg amount, total volume, prior
+  risk incidents)
+- Decision guidelines anchored to `CONFIDENCE_THRESHOLD_APPROVE` and
+  structuring detection rules
 
-Context:
-- Customer History: {history_summary}
-- Similar Transactions: {similar_txns}
-- Risk Indicators: {risk_flags}
+The LLM is asked to respond in JSON with the shape:
 
-Provide:
-1. Decision (APPROVE/REJECT/REVIEW)
-2. Confidence (0-100)
-3. Reasoning (detailed explanation)
-"""
+```json
+{
+  "decision": "approve|reject|escalate",
+  "confidence": 0,
+  "reasoning": "...",
+  "risk_factors": ["..."],
+  "compliance_notes": "..."
+}
 ```
+
+Both `bedrock_client._parse_claude_response` and
+`groq_client._parse_llm_response` accept either raw JSON or
+JSON-in-markdown (```` ```json ```` blocks), normalise legacy
+`"decision": "flag"` to `"escalate"`, and coerce string confidences
+(e.g. `"95%"`) to floats. A keyword-based fallback parser handles
+malformed responses without raising.
 
 ## Scalability Considerations
 
@@ -384,24 +494,38 @@ graph LR
 
 ### Docker Compose (PoV)
 
+The PoV uses two separate compose files joined via the external
+`temporal-network` bridge:
+
+- `docker-compose/docker-compose.yml` — Temporal server, history,
+  matching, frontend, web UI, PostgreSQL, Elasticsearch.
+- `./docker-compose.yml` (project root) — `api`, `temporal-worker`,
+  `streamlit`, all built from the project `Dockerfile`.
+
 ```yaml
+# docker-compose.yml (project root)
 services:
-  temporal:
-    image: temporalio/auto-setup
-    ports: ["7233:7233", "8080:8080"]
+  temporal-worker:
+    build: { context: ., dockerfile: Dockerfile }
+    command: python -m temporal.run_worker
+    env_file: [.env]
 
   api:
-    build: ./api
-    depends_on: [temporal]
+    build: { context: ., dockerfile: Dockerfile }
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     ports: ["8000:8000"]
+    env_file: [.env]
 
-  worker:
-    build: ./temporal
-    depends_on: [temporal, api]
-
-  dashboard:
-    build: ./dashboard
+  streamlit:
+    build: { context: ., dockerfile: Dockerfile }
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
     ports: ["8501:8501"]
+    depends_on: [api]
+    env_file: [.env]
+
+networks:
+  temporal-network:
+    external: true
 ```
 
 ### Kubernetes (Production)
@@ -428,63 +552,120 @@ Secrets:
 
 ## Technology Stack Summary
 
+Pinned versions live in `pyproject.toml` (`dependencies`).
+
 | Layer | Technology | Version | Purpose |
 |-------|------------|---------|---------|
-| API | FastAPI | 0.104+ | REST API framework |
-| Workflow | Temporal | 1.22+ | Durable execution |
-| Database | MongoDB Atlas | 7.0+ | Document store + vectors |
-| AI/ML | AWS Bedrock | Latest | Claude & Cohere models |
-| UI | Streamlit | 1.28+ | Dashboard interface |
-| Container | Docker | 24+ | Containerization |
-| Language | Python | 3.11+ | Primary language |
+| API | FastAPI | ≥0.116.2 | REST API framework |
+| Workflow | Temporal (`temporalio` SDK) | ≥1.17.0 | Durable execution |
+| Database | MongoDB Atlas | 7.0+ | Document store + vector search |
+| Driver | PyMongo | ≥4.16 (native async) | Replaces motor (deprecated) |
+| LLM | AWS Bedrock (Claude) | — | Primary LLM provider |
+| LLM | Groq (`openai/gpt-oss-120b`) | ≥1.2.0 | Alternative LLM provider |
+| Embeddings | Voyage AI (`voyage-4`) | ≥0.3.5 | Primary embedding provider, 1024 dims |
+| Embeddings | AWS Bedrock (Cohere `embed-english-v3`) | — | Fallback embedding provider, 1024 dims |
+| UI | Streamlit | ≥1.49.1 | Dashboard interface |
+| Container | Docker + Docker Compose | 24+ | Containerization |
+| Package mgr | uv | latest | Dependency + venv management |
+| Language | Python | 3.13+ | Primary language |
 
 ## API Contracts
 
-### Transaction Submission
+Canonical schemas live in `api/models.py`. These examples reflect the
+implementation in `api/main.py`.
+
+### POST /api/transaction
+
+Submit a new transaction for processing. The route persists the
+transaction, starts a `TransactionProcessingWorkflow`, and returns
+immediately while the workflow runs asynchronously.
 
 **Request:**
 ```json
-POST /api/transactions
 {
-  "transaction_id": "TXN-123",
+  "transaction_type": "wire_transfer",
   "amount": 5000.00,
   "currency": "USD",
-  "type": "wire_transfer",
-  "source_account": "ACC-001",
-  "destination_account": "ACC-002",
+  "sender": {
+    "name": "Alice Anderson",
+    "country": "US",
+    "account_number": "ACC-001",
+    "customer_id": "CUST-001"
+  },
+  "recipient": {
+    "name": "Bob Baker",
+    "country": "GB",
+    "account_number": "ACC-002"
+  },
+  "reference_number": "INV-12345",
   "description": "Invoice payment",
-  "metadata": {
-    "ip_address": "192.168.1.1",
-    "device_id": "device-123"
-  }
+  "metadata": {}
 }
 ```
 
 **Response:**
 ```json
 {
-  "workflow_id": "wf-abc-123",
+  "transaction_id": "TXN_20260511_E637A986",
   "status": "processing",
-  "estimated_completion": "2024-01-01T12:00:00Z"
+  "message": "Transaction submitted for AI analysis",
+  "workflow_id": "txn-processing-TXN_20260511_E637A986"
 }
 ```
 
-### Workflow Status Query
+### GET /api/transaction/{transaction_id}
 
-**Request:**
+Fetch the AI decision for a transaction. Returns `200` once the
+workflow has stored a decision, `202` if still pending, `404` if the
+transaction id is unknown.
+
+**Response (200):**
+```json
+{
+  "transaction_id": "TXN_20260511_E637A986",
+  "decision": "approve",
+  "confidence": 92.5,
+  "risk_score": 25.0,
+  "reasoning": "Low risk transaction with verified customer",
+  "processing_time_ms": 4120,
+  "risk_factors": []
+}
 ```
-GET /api/workflows/{workflow_id}/status
-```
+
+### GET /api/metrics
+
+Aggregate counts and averages across the `transactions` and
+`transaction_decisions` collections.
 
 **Response:**
 ```json
 {
-  "workflow_id": "wf-abc-123",
-  "status": "completed",
-  "decision": "approved",
-  "confidence": 92.5,
-  "reasoning": "Low risk transaction with verified customer",
-  "completed_at": "2024-01-01T12:00:05Z"
+  "total_transactions": 57,
+  "transactions_by_type": {"wire_transfer": 21, "international": 10, "ach": 26},
+  "decisions_breakdown": {"approve": 28, "reject": 3, "escalate": 26},
+  "average_processing_time_ms": 13212.4,
+  "average_confidence": 80.16,
+  "total_amount_processed": 2374076.93
+}
+```
+
+### GET /health
+
+Liveness + dependency status.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2026-05-11T10:47:45.522207+00:00",
+  "mongodb": "connected",
+  "temporal": "connected",
+  "embedding": {
+    "primary_model": "voyage-4",
+    "voyage_available": true,
+    "cohere_available": true,
+    "available_models": ["voyage-4", "cohere.embed-english-v3"]
+  }
 }
 ```
 
@@ -492,16 +673,30 @@ GET /api/workflows/{workflow_id}/status
 
 ### Index Strategy
 
-1. **Single Field Indexes:**
-   - `transaction_id` - Primary lookup
-   - `timestamp` - Time-based queries
-   - `workflow_id` - Temporal integration
+Indexes are created idempotently on startup by
+`database/connection.py::create_indexes()`. The full list is the source
+of truth; key shapes:
 
-2. **Compound Indexes:**
-   - `{source_account: 1, timestamp: -1}` - Account history
-   - `{status: 1, timestamp: -1}` - Queue management
+1. **Unique single-field indexes**:
+   - `transactions.transaction_id`
+   - `customers.customer_id`, `accounts.account_number`,
+     `rules.rule_id`, `notifications.notification_id`,
+     `transaction_journal.journal_id`, `balance_updates.update_id`,
+     `balance_holds.hold_id`
 
-3. **Vector Search Index:**
+2. **Compound indexes (ESR-aware):**
+   - `(sender.customer_id, created_at desc)` — `velocity_by_customer_index`
+   - `(sender.account_number, created_at desc)` — `graph_sender_time_index`
+   - `(recipient.account_number, created_at desc)` — `graph_recipient_time_index`
+   - `(transaction_type, amount, sender.country, recipient.country)` — `hybrid_search_index`
+   - `(account_number, timestamp desc)` on journal/balance_updates
+   - `(status, created_at desc)` on transactions/notifications/decisions
+
+3. **TTL indexes:**
+   - `system_metrics.timestamp` (expires after 30 days)
+   - `balance_holds.expires_at` (drives hold expiry)
+
+4. **Vector search index** (`transaction_vector_index`):
    ```javascript
    {
      "mappings": {

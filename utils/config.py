@@ -29,11 +29,16 @@ class Config:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     GROQ_MODEL_ID = os.getenv("GROQ_MODEL_ID", "openai/gpt-oss-120b")
 
-    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")  # Options: "groq", "bedrock"
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "bedrock")  # Options: "bedrock", "groq"
 
     # Embedding Configuration
+    # Use voyage-4 as primary embedding model. We pin output_dimension=1024 so
+    # produced vectors stay compatible with the Atlas vector index without
+    # recreating it. VOYAGE_MODEL is overridable via env in case Voyage changes
+    # the canonical name (e.g. voyage-4-lite, voyage-4-large).
     VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
-    VOYAGE_MODEL = "voyage-finance-2"
+    VOYAGE_MODEL = os.getenv("VOYAGE_MODEL", "voyage-4")
+    VOYAGE_OUTPUT_DIMENSION = int(os.getenv("VOYAGE_OUTPUT_DIMENSION", "1024"))
     COHERE_MODEL = "cohere.embed-english-v3"
     
     # Collections

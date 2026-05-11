@@ -87,9 +87,9 @@ cp .env.example .env
 graph LR
     A[Transaction API] --> B[Temporal Workflow]
     B --> C[MongoDB Atlas]
-    B --> D{AI Provider}
-    D -->|Option 2| D1[AWS Bedrock]
-    D -->|Option 1| D2[Groq]
+    B --> D{LLM_PROVIDER}
+    D -->|primary| D1[AWS Bedrock - Claude]
+    D -->|alternative| D2[Groq]
     C --> E[Vector Search]
     C --> F[Graph Analysis]
     D1 --> G[Fraud Detection]
@@ -106,9 +106,10 @@ graph LR
 - **FastAPI Backend** - REST API for transaction submission
 - **Temporal Worker** - Durable workflow execution engine
 - **MongoDB Atlas** - Document store with vector search capabilities
-- **Groq** - LLM provider for transaction analysis
-- **Voyage AI** - Finance-optimized embeddings (primary embedding provider)
-- **AWS Bedrock** - Claude for analysis, Cohere for embeddings (fallback provider) 
+- **AWS Bedrock** - Claude for transaction analysis (primary LLM provider)
+- **Groq** - Alternative LLM provider (selectable via `LLM_PROVIDER`)
+- **Voyage AI** - Finance-optimized embeddings (primary embedding provider, 1024 dims)
+- **AWS Bedrock + Cohere** - Embedding fallback when Voyage is unavailable
 - **Streamlit Dashboard** - Real-time monitoring and review interface
 
 ### Integration Points
@@ -124,55 +125,82 @@ For detailed architecture documentation, see [docs/ARCHITECTURE.md](docs/ARCHITE
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) for dependency management
 - Docker & Docker Compose
 - MongoDB Atlas account (free tier works)
-- AWS account with Bedrock access
+- AWS account with Bedrock access (Claude + Cohere)
+- Voyage AI API key (recommended for finance-optimized embeddings)
+- Groq API key (optional, for Groq LLM provider)
 - 8GB RAM minimum
 
 ### Quick Setup (Docker)
 
 ```bash
-# Start all services with Docker Compose
-docker-compose up -d
+# Start Temporal infrastructure (separate compose file)
+cd docker-compose && docker compose up -d && cd ..
+
+# Start application services (API, worker, dashboard)
+docker compose up -d
 
 # Verify services are running
-docker ps
+docker compose ps
 curl http://localhost:8000/health
 ```
 
 ### Local Development Setup
 
-```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+This project uses [`uv`](https://docs.astral.sh/uv/) for dependency and
+environment management. Install it once:
 
-# Install dependencies
-pip install -r requirements.txt
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then bootstrap the project:
+
+```bash
+# Install runtime + dev deps (creates .venv from uv.lock)
+uv sync --extra dev
 
 # Start Temporal (required)
-cd docker-compose && docker-compose up -d && cd ..
+cd docker-compose && docker compose up -d && cd ..
 
-# Initialize MongoDB
-python -m scripts.setup_mongodb
+# Initialize MongoDB (collections, indexes, vector index, seed data)
+uv run python -m scripts.setup_mongodb
 
 # Start services (3 terminals needed)
-python -m temporal.run_worker     # Terminal 1: Worker
-uvicorn api.main:app --reload     # Terminal 2: API
-streamlit run app.py               # Terminal 3: Dashboard
+uv run python -m temporal.run_worker     # Terminal 1: Worker
+uv run uvicorn api.main:app --reload     # Terminal 2: API
+uv run streamlit run app.py              # Terminal 3: Dashboard
+
+# Run tests with coverage
+uv run pytest --cov
 ```
+
+To produce a reproducible install in CI or fresh checkouts use
+`uv sync --frozen` against the committed `uv.lock`.
 
 ### Configuration
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `MONGODB_URI` | MongoDB Atlas connection string | - | ✅ |
+| `MONGODB_DB_NAME` | Database name | `transaction_ai_poc` | ❌ |
+| `AWS_REGION` | AWS region for Bedrock | `us-east-1` | ✅ |
 | `AWS_ACCESS_KEY_ID` | AWS credentials for Bedrock | - | ✅ |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key | - | ✅ |
-| `CONFIDENCE_THRESHOLD_APPROVE` | Min confidence for auto-approval | 85 | ❌ |
-| `AUTO_APPROVAL_LIMIT` | Max amount for auto-approval | 50000 | ❌ |
-| `TEMPORAL_HOST` | Temporal server address | localhost:7233 | ❌ |
+| `LLM_PROVIDER` | LLM backend: `bedrock` (Claude) or `groq` | `bedrock` | ❌ |
+| `BEDROCK_MODEL_VERSION` | Bedrock Claude model ID | `us.anthropic.claude-opus-4-1-20250805-v1:0` | ❌ |
+| `GROQ_API_KEY` | Groq API key (if `LLM_PROVIDER=groq`) | - | ❌ |
+| `GROQ_MODEL_ID` | Groq model ID | `openai/gpt-oss-120b` | ❌ |
+| `VOYAGE_API_KEY` | Voyage AI API key (primary embeddings) | - | ❌ |
+| `VOYAGE_MODEL` | Voyage embedding model | `voyage-4` | ❌ |
+| `CONFIDENCE_THRESHOLD_APPROVE` | Min confidence for auto-approval | `85` | ❌ |
+| `AUTO_APPROVAL_LIMIT` | Max amount before manager approval (USD) | `50000` | ❌ |
+| `TEMPORAL_HOST` | Temporal server address | `localhost:7233` | ❌ |
+| `TEMPORAL_NAMESPACE` | Temporal namespace | `default` | ❌ |
 
 For complete configuration options, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
@@ -197,12 +225,9 @@ For detailed UI instructions, see the [UI Usage Guide](docs/UI_GUIDE.md).
 
 ```bash
 # Submit a test transaction
-curl -X 'POST' \
-  'http://localhost:8000/api/transaction' \
-  -H 'accept: application/json' \
+curl -X POST 'http://localhost:8000/api/transaction' \
   -H 'Content-Type: application/json' \
   -d '{
-  "transaction_id": "2025092400001",
   "transaction_type": "wire_transfer",
   "amount": 100,
   "currency": "USD",
@@ -216,9 +241,12 @@ curl -X 'POST' \
     "country": "UK",
     "name": "Nigel Wadsworth"
   },
-  "risk_flags": [],
   "reference_number": "95027064"
 }'
+
+# Response includes the assigned transaction_id and Temporal workflow_id
+# Poll the decision endpoint until it returns 200 (rather than 202 pending)
+curl http://localhost:8000/api/transaction/<transaction_id>
 ```
 
 ### Demo Walkthrough: Fraud Detection
@@ -248,7 +276,7 @@ Make informed decisions based on AI analysis and transaction details.
 
 ```bash
 # Submit high-value transaction requiring manager approval
-python -m scripts.advanced_scenarios
+uv run python -m scripts.advanced_scenarios
 
 # Monitor in dashboard: http://localhost:8501
 # Transaction will appear in "Pending Manager Approval" queue
@@ -315,11 +343,38 @@ For detailed evaluation procedures, see [docs/EVALUATION_GUIDE.md](docs/EVALUATI
 |---------|-------|----------|
 | MongoDB connection failed | Invalid URI or network issue | Verify Atlas URI, check IP whitelist |
 | Bedrock timeout errors | Missing AWS credentials | Ensure AWS keys are in .env file |
-| Worker not processing | Temporal not running | Run `docker-compose up -d` in docker-compose/ |
+| Worker not processing | Temporal not running | Run `docker compose up -d` in `docker-compose/` |
 | Dashboard blank | API not accessible | Check API is running on port 8000 |
-| Vector search no results | Missing index | Run `python -m scripts.setup_mongodb` |
+| Vector search no results | Missing index | Run `uv run python -m scripts.setup_mongodb` |
 
 For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+## Testing
+
+The repository ships with 430+ unit and integration tests covering 97% of the
+in-scope source code (line + branch coverage).
+
+```bash
+# Run the full test suite with coverage gate (≥95%)
+uv run pytest --cov
+
+# Run only fast unit tests (no Docker/MongoDB required)
+uv run pytest tests/test_decimal_utils.py tests/test_rule_engine.py tests/test_risk_engine.py
+
+# Run integration tests (requires Docker for testcontainers)
+uv run pytest tests/test_db_integration.py tests/test_api_integration.py
+```
+
+| Test type | Location | What it covers |
+|-----------|----------|----------------|
+| Unit | `tests/test_*.py` | Pure functions: decimal utils, rule/risk engines, schemas, prompts, AI client adapters |
+| Integration | `tests/test_db_integration.py` | Repositories against a real MongoDB 7.0 replica set spun up via `testcontainers` |
+| API | `tests/test_api_integration.py` | FastAPI endpoints via `TestClient` + real MongoDB |
+| Workflow | `tests/test_temporal_workflows.py` | Temporal workflow control flow via `temporalio.testing.WorkflowEnvironment` (in-process, time-skipping) |
+| Regression fences | `tests/test_motor_to_pymongo_async.py`, `tests/test_search_regression.py`, `tests/test_voyage_embeddings.py` | Static assertions guarding key migrations and behaviours |
+
+Coverage configuration lives in `pyproject.toml` under `[tool.coverage.run]`
+and `[tool.coverage.report]`. The gate is `fail_under = 95`.
 
 ## Next Steps
 

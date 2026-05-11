@@ -370,9 +370,12 @@ class DecisionRepository:
         # Build aggregation pipeline with multiple search strategies
         pipeline = []
 
-        # Stage 1: Traditional index-based search for exact matches
+        # Stage 1: Traditional index-based search for exact matches.
+        # Restrict to decided statuses so we don't surface in-flight transactions
+        # as "similar cases" — those have no decision yet.
         match_stage = {
             "$match": {
+                "status": {"$in": DecisionRepository._DECIDED_STATUSES},
                 "$or": [
                     # Exact type and amount range match
                     {
@@ -402,10 +405,11 @@ class DecisionRepository:
                         "index": config.VECTOR_SEARCH_INDEX,
                         "path": "embedding",
                         "queryVector": embedding,
-                        "numCandidates": limit * 5,
+                        "numCandidates": limit * 20,
                         "limit": limit // 2,
                         "filter": {
-                            "transaction_type": transaction_type
+                            "transaction_type": transaction_type,
+                            "status": {"$in": DecisionRepository._DECIDED_STATUSES},
                         }
                     }
                 },
@@ -477,14 +481,38 @@ class DecisionRepository:
             },
             {
                 "$addFields": {
-                    # Combine scores with weights
-                    "combined_score": {
+                    # Combine scores with weights, renormalising so a candidate
+                    # found by only one search method (vector OR traditional) is
+                    # not penalised for the missing branch. Without this, the
+                    # max possible combined score is 0.8 for vector-only hits,
+                    # which collides with SIMILARITY_THRESHOLD = 0.75.
+                    "_raw_score": {
                         "$add": [
                             {"$multiply": [{"$ifNull": ["$vector_score", 0]}, 0.4]},
                             {"$multiply": [{"$ifNull": ["$traditional_score", 0]}, 0.2]},
                             {"$multiply": ["$similarity_features.amount_score", 0.2]},
                             {"$multiply": ["$similarity_features.geo_score", 0.1]},
                             {"$multiply": ["$similarity_features.type_score", 0.1]}
+                        ]
+                    },
+                    "_active_weight": {
+                        "$add": [
+                            {"$cond": [{"$gt": [{"$ifNull": ["$vector_score", 0]}, 0]}, 0.4, 0]},
+                            {"$cond": [{"$gt": [{"$ifNull": ["$traditional_score", 0]}, 0]}, 0.2, 0]},
+                            0.2,  # amount_score is always present
+                            0.1,  # geo_score is always present
+                            0.1,  # type_score is always present
+                        ]
+                    },
+                }
+            },
+            {
+                "$addFields": {
+                    "combined_score": {
+                        "$cond": [
+                            {"$gt": ["$_active_weight", 0]},
+                            {"$divide": ["$_raw_score", "$_active_weight"]},
+                            0,
                         ]
                     }
                 }
@@ -543,23 +571,47 @@ class DecisionRepository:
                 )
             raise e
 
+    # Statuses representing a transaction that has reached a recorded decision
+    # (and is therefore useful as a "similar case" precedent for the AI). We
+    # exclude only `pending` and `processing` — those are still in-flight and
+    # have no decision in the decisions collection. `escalated` and
+    # `pending_review` DO have decisions attached (the human-review queue
+    # persists the AI recommendation as a decision), so they are valid
+    # precedents.
+    _DECIDED_STATUSES = [
+        "approved",
+        "rejected",
+        "completed",
+        "escalated",
+        "pending_review",
+        "pending_manager_approval",
+    ]
+
     @staticmethod
     async def vector_search_similar_transactions(
         embedding: List[float],
         transaction_type: str,
         limit: int = 10
     ) -> List[Dict]:
-        """Fallback vector-only search for similar transactions."""
+        """Fallback vector-only search for similar transactions.
+
+        Filters on `status` (in addition to `transaction_type`) so we only
+        compare against transactions that already have a recorded decision.
+        Truly in-flight (`pending`, `processing`) transactions are excluded.
+        `numCandidates` follows the `mongodb-search-and-ai` skill
+        recommendation of 20x `limit`.
+        """
         pipeline = [
             {
                 "$vectorSearch": {
                     "index": config.VECTOR_SEARCH_INDEX,
                     "path": "embedding",
                     "queryVector": embedding,
-                    "numCandidates": limit * 10,
+                    "numCandidates": limit * 20,
                     "limit": limit,
                     "filter": {
-                        "transaction_type": transaction_type
+                        "transaction_type": transaction_type,
+                        "status": {"$in": DecisionRepository._DECIDED_STATUSES},
                     }
                 }
             },
@@ -624,7 +676,7 @@ class DecisionRepository:
                                 {"recipient.account_number": account_id}
                             ]
                         },
-                        {"timestamp": {"$gte": cutoff_date}}
+                        {"created_at": {"$gte": cutoff_date}}
                     ]
                 }
             },
@@ -639,7 +691,7 @@ class DecisionRepository:
                     "maxDepth": max_depth,
                     "depthField": "chain_depth",
                     "restrictSearchWithMatch": {
-                        "timestamp": {"$gte": cutoff_date}
+                        "created_at": {"$gte": cutoff_date}
                     }
                 }
             },
@@ -649,7 +701,7 @@ class DecisionRepository:
                     "root_transaction": {
                         "transaction_id": "$transaction_id",
                         "amount": "$amount",
-                        "timestamp": "$timestamp"
+                        "timestamp": "$created_at"
                     },
                     "network_size": {"$size": "$transaction_chain"},
                     "total_network_amount": {"$sum": "$transaction_chain.amount"},
@@ -1070,7 +1122,7 @@ class MetricsRepository:
             }
         ]
         
-        cursor = db.database[config.SYSTEM_METRICS_COLLECTION].aggregate(pipeline)
+        cursor = await db.database[config.SYSTEM_METRICS_COLLECTION].aggregate(pipeline)
         results = await cursor.to_list(length=100)
         
         return {
