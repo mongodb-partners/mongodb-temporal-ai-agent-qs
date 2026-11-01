@@ -81,6 +81,9 @@ cp .env.example .env
 
 ## Architecture
 
+![Architecture](docs/images/architecture.svg)
+
+
 ### High-Level System Flow
 
 ```mermaid
