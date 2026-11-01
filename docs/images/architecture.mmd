@@ -1,0 +1,34 @@
+---
+title: Fraud detection with Temporal and MongoDB Atlas
+---
+flowchart LR
+subgraph clients[Clients]
+UI["Streamlit dashboard"]
+Ext["API clients"]
+end
+Api["FastAPI<br/>transaction API"]
+subgraph temporal[Temporal]
+TS["Temporal server"]
+Worker["Python worker<br/>TransactionProcessingWorkflow"]
+end
+subgraph atlas[MongoDB Atlas]
+Docs[("transactions, decisions,<br/>customers, rules")]
+Vec[("Vector Search<br/>1024 dim")]
+Graph["graphLookup<br/>fraud network"]
+end
+subgraph ai[AI services]
+LLM["AWS Bedrock Claude<br/>or Groq"]
+Emb["Voyage AI embeddings<br/>Bedrock Cohere fallback"]
+end
+Review["Human review queue"]
+UI --> Api
+Ext --> Api
+Api --> TS
+TS --> Worker
+Worker --> Docs
+Worker --> Vec
+Worker --> Graph
+Worker --> LLM
+Worker --> Emb
+Worker -->|low confidence| Review
+Review --> UI
