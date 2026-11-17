@@ -1,0 +1,2 @@
+# Dynamic config overrides for the development deploy.
+# Empty by default — Temporal falls back to compiled-in defaults.

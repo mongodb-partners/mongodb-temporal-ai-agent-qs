@@ -494,13 +494,21 @@ graph LR
 
 ### Docker Compose (PoV)
 
-The PoV uses two separate compose files joined via the external
-`temporal-network` bridge:
+One compose file, `./docker-compose.yml`, runs the whole stack. Temporal runs
+on MongoDB through the MongoDB Temporal plugin, so there is no Postgres,
+Cassandra, MySQL or Elasticsearch:
 
-- `docker-compose/docker-compose.yml` — Temporal server, history,
-  matching, frontend, web UI, PostgreSQL, Elasticsearch.
-- `./docker-compose.yml` (project root) — `api`, `temporal-worker`,
-  `streamlit`, all built from the project `Dockerfile`.
+- `mongodb` — MongoDB 8.2 with Atlas Search and Vector Search; holds
+  Temporal's state, Temporal visibility and the app's data.
+- `schema-init` — creates the plugin's schema and visibility search index.
+- `temporal` — Temporal server with the MongoDB plugin
+  (config in `temporal-mongodb/config/`).
+- `namespace-init` — registers the `default` namespace.
+- `temporal-ui` — Temporal Web UI.
+- `api`, `temporal-worker`, `streamlit` — built from the project `Dockerfile`.
+
+Against Atlas, VPC peering between the Atlas project and the deployment VPC is
+required (see the README, "Using Atlas"). Abridged app services:
 
 ```yaml
 # docker-compose.yml (project root)
@@ -522,10 +530,6 @@ services:
     ports: ["8501:8501"]
     depends_on: [api]
     env_file: [.env]
-
-networks:
-  temporal-network:
-    external: true
 ```
 
 ### Kubernetes (Production)
