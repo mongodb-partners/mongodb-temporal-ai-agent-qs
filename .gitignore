@@ -212,7 +212,6 @@ __marimo__/
 # It is generally safe to ignore this file as it does not affect the functionality of the project
 
 # Project-specific ignores
-docker-compose/
 test_*.py
 !tests/test_*.py
 check_*.py
@@ -225,3 +224,9 @@ check_*.py
 .claude/
 
 .specs/
+
+# Local-only docs (not for distribution)
+about.md
+pip-to-uv.md
+# Local clone of the MongoDB Temporal plugin (see scripts/quickstart.sh)
+.temporal-plugin/

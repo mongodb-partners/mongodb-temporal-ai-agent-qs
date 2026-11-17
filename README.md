@@ -13,14 +13,21 @@ cd mongodb-temporal-ai-agent-qs
 
 # 2. Configure environment (minimal setup)
 cp .env.example .env
-# Edit .env with your MongoDB Atlas URI and AWS credentials
+# Add your AWS credentials (and Voyage/Groq keys if you use them)
 
-# 3. Run quick setup (creates venv, installs deps, starts Temporal on Docker and launch the app)
+# 3a. Run everything on Docker: MongoDB 8.2, Temporal on MongoDB (plugin), worker, API, dashboard
+./scripts/quickstart.sh up
+
+# 3b. or run MongoDB + Temporal on Docker and the app on the host (uv)
 ./scripts/quick_setup.sh
-
-# or Run docker setup (Deploy everything on Docker and launch the app)
-./scripts/docker_setup.sh
 ```
+
+Temporal runs on MongoDB through the
+[MongoDB Temporal plugin](https://github.com/mongodb-partners/mongodb-temporal-plugin):
+one MongoDB replica set holds Temporal's state and visibility and the app's
+data. There is no Postgres, Cassandra, MySQL or Elasticsearch in this stack.
+`quickstart.sh` clones and builds the plugin into `.temporal-plugin/` the
+first time; set `TEMPORAL_PLUGIN_DIR` to use an existing checkout.
 
 ## Table of Contents
 
@@ -140,16 +147,46 @@ For detailed architecture documentation, see [docs/ARCHITECTURE.md](docs/ARCHITE
 ### Quick Setup (Docker)
 
 ```bash
-# Start Temporal infrastructure (separate compose file)
-cd docker-compose && docker compose up -d && cd ..
-
-# Start application services (API, worker, dashboard)
-docker compose up -d
+# Build and start MongoDB, Temporal (MongoDB plugin), worker, API and dashboard
+./scripts/quickstart.sh up
 
 # Verify services are running
-docker compose ps
+./scripts/quickstart.sh status
 curl http://localhost:8000/health
+
+# Stop (keeps data); add -v to delete the data
+./scripts/quickstart.sh down
 ```
+
+Everything is one compose file (`docker-compose.yml`). Ports bind to
+`127.0.0.1` only: the local MongoDB has no authentication and Temporal accepts
+every request, so never publish them. If port 27017 is taken, set
+`MONGO_PORT` (for example `MONGO_PORT=27018 ./scripts/quickstart.sh up`).
+
+### Using Atlas
+
+The quickstart runs MongoDB 8.2 locally. To run the app, and Temporal's
+persistence, against MongoDB Atlas instead:
+
+- **VPC peering is required** when you deploy and connect to Atlas. Peer the
+  Atlas project's network container with the VPC that hosts the Temporal
+  server, worker and API (for example the EC2 host or Kubernetes cluster), add
+  the peering route and allow the VPC CIDR in the Atlas IP access list. The
+  Temporal server opens many short connections to its store, so use the
+  private peered connection string, not a public one.
+- Use an Atlas cluster of M10 or larger. Temporal's visibility uses Atlas
+  Search, so it needs a tier that supports it.
+- Create a dedicated database user for Temporal (database `temporal`) and keep
+  it separate from the app user.
+- Set the URIs in `.env` (`TEMPORAL_MONGO_URI` for Temporal and
+  `MONGODB_URI_DOCKER` for the containers; `MONGODB_URI` when running on the
+  host) and start with `./scripts/quickstart.sh up`; the local `mongodb`
+  container is then unused.
+
+See the plugin's own
+[deployment](https://github.com/mongodb-partners/mongodb-temporal-plugin/blob/main/docs/operator/deployment.md)
+and [security](https://github.com/mongodb-partners/mongodb-temporal-plugin/blob/main/docs/operator/security.md)
+guides before exposing Temporal beyond localhost.
 
 ### Local Development Setup
 
@@ -167,8 +204,8 @@ Then bootstrap the project:
 # Install runtime + dev deps (creates .venv from uv.lock)
 uv sync --extra dev
 
-# Start Temporal (required)
-cd docker-compose && docker compose up -d && cd ..
+# Start MongoDB + Temporal on Docker (required; builds the MongoDB plugin image)
+./scripts/quickstart.sh infra
 
 # Initialize MongoDB (collections, indexes, vector index, seed data)
 uv run python -m scripts.setup_mongodb
@@ -204,6 +241,9 @@ To produce a reproducible install in CI or fresh checkouts use
 | `AUTO_APPROVAL_LIMIT` | Max amount before manager approval (USD) | `50000` | ❌ |
 | `TEMPORAL_HOST` | Temporal server address | `localhost:7233` | ❌ |
 | `TEMPORAL_NAMESPACE` | Temporal namespace | `default` | ❌ |
+| `TEMPORAL_MONGO_URI` | MongoDB URI for Temporal's own store (compose only) | local container | ❌ |
+| `MONGODB_URI_DOCKER` | MongoDB URI the app containers use (compose only) | local container | ❌ |
+| `TEMPORAL_PLUGIN_DIR` | Checkout of `mongodb-temporal-plugin` to build | `./.temporal-plugin` | ❌ |
 
 For complete configuration options, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
@@ -346,7 +386,7 @@ For detailed evaluation procedures, see [docs/EVALUATION_GUIDE.md](docs/EVALUATI
 |---------|-------|----------|
 | MongoDB connection failed | Invalid URI or network issue | Verify Atlas URI, check IP whitelist |
 | Bedrock timeout errors | Missing AWS credentials | Ensure AWS keys are in .env file |
-| Worker not processing | Temporal not running | Run `docker compose up -d` in `docker-compose/` |
+| Worker not processing | Temporal not running | Run `./scripts/quickstart.sh up` (or `infra`) |
 | Dashboard blank | API not accessible | Check API is running on port 8000 |
 | Vector search no results | Missing index | Run `uv run python -m scripts.setup_mongodb` |
 

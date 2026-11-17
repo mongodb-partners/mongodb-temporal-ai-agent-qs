@@ -1,0 +1,74 @@
+log:
+    stdout: true
+    level: info
+
+persistence:
+    numHistoryShards: 4
+    defaultStore: mongo-default
+    visibilityStore: mongo-visibility
+    datastores:
+        mongo-default:
+            customDatastore:
+                name: mongodb
+                options:
+                    uri: ${TEMPORAL_MONGO_URI}
+                    database: temporal
+                    numHistoryShards: 4
+        mongo-visibility:
+            customDatastore:
+                name: mongodb
+                options:
+                    uri: ${TEMPORAL_MONGO_URI}
+                    database: temporal
+                    visibilityMode: ${TEMPORAL_VISIBILITY_MODE}
+
+global:
+    membership:
+        maxJoinDuration: 30s
+        broadcastAddress: "127.0.0.1"
+
+services:
+    frontend:
+        rpc:
+            grpcPort: 7233
+            membershipPort: 6933
+            bindOnIP: "0.0.0.0"
+            httpPort: 7243
+    matching:
+        rpc:
+            grpcPort: 7235
+            membershipPort: 6935
+            bindOnIP: "0.0.0.0"
+    history:
+        rpc:
+            grpcPort: 7234
+            membershipPort: 6934
+            bindOnIP: "0.0.0.0"
+    worker:
+        rpc:
+            grpcPort: 7239
+            membershipPort: 6939
+            bindOnIP: "0.0.0.0"
+
+clusterMetadata:
+    enableGlobalNamespace: false
+    failoverVersionIncrement: 10
+    masterClusterName: "active"
+    currentClusterName: "active"
+    clusterInformation:
+        active:
+            enabled: true
+            initialFailoverVersion: 1
+            rpcName: "frontend"
+            rpcAddress: "127.0.0.1:7233"
+            httpAddress: "127.0.0.1:7243"
+
+dcRedirectionPolicy:
+    policy: "noop"
+
+publicClient:
+    hostPort: "127.0.0.1:7233"
+
+dynamicConfigClient:
+    filepath: "/etc/temporal/config/dynamicconfig/development.yaml"
+    pollInterval: "60s"

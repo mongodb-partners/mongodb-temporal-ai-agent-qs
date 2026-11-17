@@ -253,7 +253,9 @@ startup event failed to reach `TEMPORAL_HOST`.
 
 ## Docker Compose
 
-Both compose files load environment from the project's `.env`:
+The compose file loads environment from the project's `.env`; `TEMPORAL_HOST` and
+`MONGODB_URI` are overridden for the containers (`temporal:7233` and the local
+`mongodb` container, or `MONGODB_URI_DOCKER` for Atlas):
 
 ```yaml
 # docker-compose.yml (project root)

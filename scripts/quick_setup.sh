@@ -30,7 +30,7 @@ export $(cat .env | grep -v '^#' | xargs)
 # Check required environment variables
 if [ -z "$MONGODB_URI" ]; then
     echo "❌ MONGODB_URI not set in .env file"
-    echo "   Please add your MongoDB Atlas connection string"
+    echo "   Add a MongoDB URI (local Docker: mongodb://localhost:27017/?directConnection=true)"
     exit 1
 fi
 
@@ -38,21 +38,9 @@ if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
     echo "⚠️  AWS credentials not set. AI features will use mock mode."
 fi
 
-# Start Docker services
-echo "🐳 Starting Docker services (Temporal)..."
-docker network inspect temporal-network >/dev/null 2>&1 || docker network create temporal-network
-
-if [ ! -d docker-compose ]; then
-    git clone https://github.com/temporalio/docker-compose.git
-fi
-cd docker-compose
-grep -q "external: true" docker-compose.yml || echo -e "    external: true" >> docker-compose.yml
-docker-compose up -d
-cd ..
-
-# Wait for Temporal to be ready
-echo "⏳ Waiting for Temporal to start..."
-sleep 10
+# Start MongoDB + Temporal (MongoDB plugin) on Docker
+echo "🐳 Starting MongoDB and Temporal (MongoDB plugin) on Docker..."
+./scripts/quickstart.sh infra
 
 # Setup MongoDB
 echo "🗄️ Setting up MongoDB collections and indexes..."

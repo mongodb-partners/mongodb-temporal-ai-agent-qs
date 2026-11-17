@@ -139,10 +139,10 @@ TEMPORAL_TASK_QUEUE=transaction-processing-queue
 ```bash
 # Local Temporal
 docker ps | grep temporal
-docker logs temporal
+docker compose logs temporal
 
 # Restart if needed
-cd docker-compose && docker compose restart temporal
+docker compose restart temporal
 ```
 
 #### Problem: "Workflow execution failed"
@@ -542,19 +542,16 @@ from IPython import embed; embed()
 ### 1. Full System Restart
 
 ```bash
-# Stop application services
-docker compose down
+# Stop everything (add -v to delete MongoDB/Temporal data)
+./scripts/quickstart.sh down
 
-# Stop Temporal infrastructure
-cd docker-compose && docker compose down && cd ..
 
 # Clean up logs and dangling containers
 rm -rf logs/*.log
 docker system prune -f
 
-# Start fresh
-cd docker-compose && docker compose up -d && cd ..
-docker compose up -d
+# Start fresh (MongoDB, Temporal and the app)
+./scripts/quickstart.sh up
 
 # Re-seed MongoDB if needed
 uv run python -m scripts.setup_mongodb
@@ -621,7 +618,7 @@ cat .env | sed 's/=.*/=***/'
 3. **Error logs:**
 ```bash
 tail -n 100 logs/app.log
-docker logs temporal
+docker compose logs temporal
 ```
 
 4. **System resources:**

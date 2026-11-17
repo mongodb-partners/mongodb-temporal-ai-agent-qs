@@ -1,30 +1,146 @@
-services:
-  # Temporal Worker
-  temporal-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: python -m temporal.run_worker
-    environment:
-      - PYTHONUNBUFFERED=1
-    env_file:
-      - .env
-    networks:
-      - temporal-network
-    restart: unless-stopped
+# Transaction AI PoV on Docker. Temporal runs on MongoDB through the
+# MongoDB Temporal plugin: there is no Postgres, Cassandra, MySQL or
+# Elasticsearch anywhere in this stack.
+#
+#   mongodb          MongoDB 8.2 with Atlas Search + Vector Search
+#                    (mongodb-atlas-local). One replica set holds Temporal's
+#                    state, Temporal visibility and the app's data.
+#   schema-init      creates the plugin's schema and visibility search index.
+#   temporal         Temporal server with the MongoDB plugin.
+#   namespace-init   registers the Temporal namespace the app uses.
+#   temporal-ui      Temporal Web UI.
+#   temporal-worker, api, streamlit   the application.
+#
+# Start it with ./scripts/quickstart.sh up (builds the plugin image first).
+# DEVELOPMENT ONLY: MongoDB has no authentication and Temporal accepts every
+# request, so every port binds to 127.0.0.1. Never publish these ports.
+#
+# Atlas: set TEMPORAL_MONGO_URI and MONGODB_URI_DOCKER in .env to your Atlas
+# URI. Atlas needs VPC peering when you deploy (see README, "Using Atlas").
 
-  # FastAPI Backend
-  api:
+name: maap-temporal
+
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  environment: &app-env
+    PYTHONUNBUFFERED: "1"
+    TEMPORAL_HOST: temporal:7233
+    MONGODB_URI: ${MONGODB_URI_DOCKER:-mongodb://mongodb:27017/?directConnection=true}
+  depends_on:
+    namespace-init:
+      condition: service_completed_successfully
+  restart: unless-stopped
+
+services:
+  mongodb:
+    image: mongodb/mongodb-atlas-local:8.2@sha256:bb4d49b8828884bc523cab1f4e39ed6fa3615e56d30439410ba1446677c12ffa
+    hostname: mongodb
+    ports:
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+      - mongot-data:/data/mongot
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 20s
+
+  schema-init:
+    image: ${PLUGIN_IMAGE:-temporal-mongodb-plugin:local}
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ${TEMPORAL_PLUGIN_DIR:-./.temporal-plugin}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      MONGO_URI: ${TEMPORAL_MONGO_URI:-mongodb://mongodb:27017/?directConnection=true}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        temporal-mongodb-tool setup-schema --uri "$$MONGO_URI" --database temporal \
+          --schema-dir /etc/temporal-mongodb/schema/versioned --num-history-shards 4
+        temporal-mongodb-tool setup-atlas-search --uri "$$MONGO_URI" --database temporal \
+          --atlas-schema-dir /etc/temporal-mongodb/schema/atlas_search --timeout 600
+        echo "schema and visibility search index ready"
+
+  temporal:
+    image: ${PLUGIN_IMAGE:-temporal-mongodb-plugin:local}
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
+    environment:
+      TEMPORAL_MONGO_URI: ${TEMPORAL_MONGO_URI:-mongodb://mongodb:27017/?directConnection=true}
+      TEMPORAL_VISIBILITY_MODE: atlas-search
+      MONGO_HEALTH_URI: ${TEMPORAL_MONGO_URI:-mongodb://mongodb:27017/?directConnection=true}
+      MONGO_HEALTH_DB: temporal
+    volumes:
+      - ./temporal-mongodb/config:/etc/temporal/config:ro
+    entrypoint: ["/sbin/tini", "--", "sh", "-c"]
+    command:
+      - |
+        set -e
+        mkdir -p /tmp/temporal-config/dynamicconfig
+        sh /etc/temporal/config/render-config.sh /etc/temporal/config/development.yaml /tmp/temporal-config/development.yaml
+        cp /etc/temporal/config/dynamicconfig/development.yaml /tmp/temporal-config/dynamicconfig/development.yaml
+        exec /usr/local/bin/temporal-mongodb-server --start --config /tmp/temporal-config \
+          --env development --services history,matching,frontend,worker
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  namespace-init:
+    image: ${TEMPORAL_ADMIN_TOOLS_IMAGE:-temporalio/admin-tools:1.29}
+    depends_on:
+      temporal:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        ns="$${TEMPORAL_NAMESPACE:-default}"
+        temporal operator namespace describe -n "$$ns" >/dev/null 2>&1 \
+          || temporal operator namespace create -n "$$ns" --retention 3d
+        echo "namespace $$ns ready"
+
+  temporal-ui:
+    image: ${TEMPORAL_UI_IMAGE:-temporalio/ui:2.37.4@sha256:350b26d351f46a8917e0a5f98035487bcdfcf3f94fd5051badeeb723a8b553b1}
+    depends_on:
+      temporal:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TEMPORAL_UI_PORT:-8080}:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_DEFAULT_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+
+  temporal-worker:
+    <<: *app
+    command: python -m temporal.run_worker
+
+  api:
+    <<: *app
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
-      - "8000:8000"
-    environment:
-      - PYTHONUNBUFFERED=1
-    env_file:
-      - .env
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./api:/app/api
       - ./services:/app/services
@@ -32,35 +148,24 @@ services:
       - ./ai:/app/ai
       - ./database:/app/database
       - ./temporal:/app/temporal
-    networks:
-      - temporal-network
-    restart: unless-stopped
 
-  # Streamlit Dashboard
   streamlit:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *app
     command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
     ports:
-      - "8501:8501"
-    environment:
-      - PYTHONUNBUFFERED=1
-    env_file:
-      - .env
+      - "127.0.0.1:8501:8501"
     volumes:
       - ./app.py:/app/app.py
       - ./services:/app/services
       - ./utils:/app/utils
       - ./database:/app/database
+    environment:
+      <<: *app-env
+      API_BASE_URL: http://api:8000/api
     depends_on:
       - api
-    networks:
-      - temporal-network
-    restart: unless-stopped
 
-networks:
-  temporal-network:
-    driver: bridge
-    name: temporal-network
-    external: true
+volumes:
+  mongo-data:
+  mongo-config:
+  mongot-data:

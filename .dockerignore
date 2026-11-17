@@ -49,7 +49,6 @@ logs/
 .gitignore
 
 # Docker
-docker-compose/
 .dockerignore
 
 # Documentation — keep README.md in the build context because
